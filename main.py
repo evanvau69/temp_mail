@@ -105,9 +105,9 @@ async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TY
         user_id = int(data.split("_")[1])
         free_trial_users[user_id] = "active"
         await context.bot.send_message(chat_id=user_id, text="✅ আপনার Subscription চালু করা হয়েছে")
-        await query.message.delete()
+        await query.edit_message_text("✅ Approve করা হয়েছে এবং Permission দেওয়া হয়েছে।")
     elif data.startswith("cancel_"):
-        await query.message.delete()
+        await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
 
 # Webhook handler
 async def handle_update(request):
