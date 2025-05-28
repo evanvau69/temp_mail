@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import aiohttp
+import re
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
@@ -14,6 +15,11 @@ logger = logging.getLogger(__name__)
 
 free_trial_users = {}
 user_sessions = {}
+user_twilio = {}
+
+# Utility function to detect Canada numbers from any message
+def extract_canada_numbers(text):
+    return list(set(re.findall(r"\+?1\d{10}", text)))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -29,8 +35,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("⬜ 1 Hour - Free 🌸", callback_data="plan_free")],
         [InlineKeyboardButton("🔴 1 Day - 2$", callback_data="plan_1d")],
-        [InlineKeyboardButton("🟠 7 Day - 10$", callback_data="plan_7d")],
-        [InlineKeyboardButton("🟡 15 Day - 15$", callback_data="plan_15d")],
+        [InlineKeyboardButton("🔸 7 Day - 10$", callback_data="plan_7d")],
+        [InlineKeyboardButton("🔹 15 Day - 15$", callback_data="plan_15d")],
         [InlineKeyboardButton("🟢 30 Day - 20$", callback_data="plan_30d")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -59,7 +65,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             free_trial_users[user_id] = "active"
             await query.message.delete()
             await context.bot.send_message(chat_id=user_id, text="✅ আপনার Free Trial Subscription টি চালু হয়েছে")
-
             async def revoke():
                 await asyncio.sleep(3600)
                 free_trial_users.pop(user_id, None)
@@ -74,31 +79,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "plan_30d": ("30 Day", "20$")
         }
         duration, price = plan_info.get(query.data, ("", ""))
-
-        text = (
-            f"{user_name} {duration} সময়ের জন্য Subscription নিতে চাচ্ছে।\n\n"
-            f"🔆 User Name : {user_name}\n"
-            f"🔆 User ID : {user_id}\n"
-            f"🔆 Username : @{username}"
-        )
-        buttons = [
-            [InlineKeyboardButton("APPRUVE ✅", callback_data=f"approve_{user_id}"),
-             InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel_{user_id}")]
-        ]
-        reply_markup = InlineKeyboardMarkup(buttons)
-
+        text = f"{user_name} {duration} Subscription নিতে চাচ্ছে।\n\n🔆 Username : @{username}\n🔆 User ID : {user_id}"
+        buttons = [[InlineKeyboardButton("APPRUVE ✅", callback_data=f"approve_{user_id}"), InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel_{user_id}")]]
         await query.message.delete()
-        await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=reply_markup)
-
-        payment_msg = (
-            f"Please send ${price} to Binance Pay ID: \nপেমেন্ট করে প্রমান হিসাবে Admin এর কাছে স্কিনশর্ট অথবা transaction ID দিন @Mr_Evan3490\n\n"
-            f"Your payment details:\n"
-            f"🆔 User ID: {user_id}\n"
-            f"👤 Username: @{username}\n"
-            f"📋 Plan: {duration}\n"
-            f"💰 Amount: ${price}"
-        )
-        await context.bot.send_message(chat_id=user_id, text=payment_msg)
+        await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=InlineKeyboardMarkup(buttons))
+        await context.bot.send_message(chat_id=user_id, text=f"Please send ${price} to Binance Pay ID: ...\nপেমেন্ট প্রমাণ Admin @Mr_Evan3490 কে দিন\n\nPlan: {duration}, Amount: ${price}")
 
     elif query.data == "login":
         await context.bot.send_message(chat_id=user_id, text="আপনার Sid এবং Auth Token দিন 🎉\n\nব্যবহার হবে: `<sid> <auth>`", parse_mode='Markdown')
@@ -107,50 +92,72 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = int(query.data.split("_")[1])
         free_trial_users[uid] = "active"
         await context.bot.send_message(chat_id=uid, text="✅ আপনার Subscription চালু করা হয়েছে")
-        await query.edit_message_text("✅ Approve করা হয়েছে এবং Permission দেওয়া হয়েছে।")
+        await query.edit_message_text("✅ Approve করা হয়েছে।")
 
     elif query.data.startswith("cancel_"):
-        await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
+        await query.edit_message_text("❌ Subscription বাতিল করা হয়েছে।")
+
+    elif query.data.startswith("buy_"):
+        phone = query.data.split("_", 1)[1]
+        session = user_twilio.get(user_id)
+        if not session:
+            await query.edit_message_text("❌ Token সেট করা হয়নি। Login করুন।")
+            return
+        sid, auth = session
+        try:
+            async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as s:
+                # Try buying number
+                payload = {"PhoneNumber": phone}
+                url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers.json"
+                async with s.post(url, data=payload) as resp:
+                    if resp.status == 401:
+                        await query.edit_message_text("টোকেন Suspend হয়েছে 😥 অন্য টোকেন ব্যবহার করুন ♻️")
+                        return
+                    elif resp.status != 201:
+                        await query.edit_message_text("আপনার  টোকেনে পর্যাপ্ত ব্যালেন্স নাই 😥 অন্য টোকেন ব্যবহার করুন ♻️")
+                        return
+                    await query.edit_message_text(f"🎉 Congestion  নাম্বারটি কিনা হয়েছে 🎉\n\n{phone}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Message ✉️", callback_data="msg")]]))
+        except:
+            await query.edit_message_text("⚠️ নাম্বার কেনা যায়নি, আবার চেষ্টা করুন")
 
 async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if free_trial_users.get(user_id) != "active":
         return
 
-    try:
-        sid, auth = update.message.text.strip().split(" ", 1)
-    except:
-        await update.message.reply_text("⚠️ সঠিকভাবে Sid এবং Auth দিন, উদাহরণ: `<sid> <auth>`", parse_mode='Markdown')
+    text = update.message.text
+    if re.fullmatch(r".*1\d{10}.*", text):
+        numbers = extract_canada_numbers(text)
+        for number in numbers:
+            keyboard = [[InlineKeyboardButton("Buy 💰", callback_data=f"buy_{number}")]]
+            await update.message.reply_text(f"{number}", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
-        async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
-            if resp.status == 401:
-                await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
-                return
-            data = await resp.json()
-            account_name = data['accounts'][0]['friendly_name']
-            balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
+    try:
+        sid, auth = text.strip().split(" ", 1)
+        async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
+            async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
+                if resp.status == 401:
+                    await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
+                    return
+                data = await resp.json()
+                account_name = data['accounts'][0]['friendly_name']
+                balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
 
-        async with session.get(balance_url) as b:
-            balance_data = await b.json()
-            balance = float(balance_data.get("balance", 0.0))
-            currency = balance_data.get("currency", "USD")
-
-            if currency != "USD":
-                rate_url = f"https://open.er-api.com/v6/latest/{currency}"
-                async with session.get(rate_url) as rate_resp:
-                    rates = await rate_resp.json()
-                    usd_rate = rates["rates"].get("USD", 1)
-                    balance = balance * usd_rate
-
-            await update.message.reply_text(
-                f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
-                f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
-                f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
-            )
+            async with session.get(balance_url) as b:
+                balance_data = await b.json()
+                balance = float(balance_data.get("balance", 0.0))
+                currency = balance_data.get("currency", "USD")
+                if currency != "USD":
+                    rate_url = f"https://open.er-api.com/v6/latest/{currency}"
+                    async with session.get(rate_url) as rate_resp:
+                        rates = await rate_resp.json()
+                        usd_rate = rates["rates"].get("USD", 1)
+                        balance = balance * usd_rate
+                user_twilio[user_id] = (sid, auth)
+                await update.message.reply_text(f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\nবিঃদ্রঃ নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন ♻️\nFounded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁")
+    except:
+        await update.message.reply_text("⚠️ সঠিকভাবে Sid এবং Auth দিন, উদাহরণ: `<sid> <auth>`", parse_mode='Markdown')
 
 async def handle_update(request):
     data = await request.json()
