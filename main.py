@@ -6,25 +6,25 @@ import string
 import re
 import os
 
-API_TOKEN = os.environ.get("BOT_TOKEN")  # Render Dashboard থেকে সেট করবে
+API_TOKEN = os.environ.get("BOT_TOKEN")
 bot = telebot.TeleBot(API_TOKEN)
 
 app = Flask(__name__)
 
 user_data = {}
 
-# Generate temp mail
+# Temp mail বানানোর ফাংশন
 def generate_email():
     login = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
     domain = random.choice(["1secmail.com", "1secmail.org", "1secmail.net"])
     return login, domain
 
-# Extract OTP
+# OTP বের করার ফাংশন
 def extract_otp(text):
     matches = re.findall(r'\b\d{4,8}\b', text)
     return matches[0] if matches else None
 
-# Receive new Telegram updates via webhook
+# Telegram webhook এ আপডেট নেওয়া
 @app.route(f"/{API_TOKEN}", methods=["POST"])
 def webhook():
     json_str = request.get_data().decode("UTF-8")
@@ -32,7 +32,7 @@ def webhook():
     bot.process_new_updates([update])
     return '', 200
 
-# Telegram command: /get_mail
+# /get_mail কমান্ড হ্যান্ডলার
 @bot.message_handler(commands=['get_mail'])
 def get_mail(message):
     user_id = message.chat.id
@@ -41,7 +41,7 @@ def get_mail(message):
     email_address = f"{login}@{domain}"
     bot.send_message(user_id, f"📬 তোমার নতুন Temp Mail:\n`{email_address}`", parse_mode="Markdown")
 
-# Check mail manually (bonus)
+# /check কমান্ড হ্যান্ডলার (মেইল চেক করবে)
 @bot.message_handler(commands=['check'])
 def check_mail(message):
     user_id = message.chat.id
@@ -55,10 +55,12 @@ def check_mail(message):
     url = f"https://www.1secmail.com/api/v1/?action=getMessages&login={login}&domain={domain}"
     
     resp = requests.get(url).json()
-    new_msgs = []
+
+    new_msgs_found = False
 
     for msg in resp:
         if msg['id'] not in prev_ids:
+            new_msgs_found = True
             user_data[user_id]['emails'].append(msg['id'])
             read_url = f"https://www.1secmail.com/api/v1/?action=readMessage&login={login}&domain={domain}&id={msg['id']}"
             full_msg = requests.get(read_url).json()
@@ -69,11 +71,14 @@ def check_mail(message):
             else:
                 bot.send_message(user_id, f"✉️ মেইল এসেছে:\n\n{msg['subject']}\n\n{text}", parse_mode="Markdown")
 
-    if not new_msgs:
+    if not new_msgs_found:
         bot.send_message(user_id, "📭 নতুন কোনো মেইল পাওয়া যায়নি।")
 
-# Root check
+# Root path test
 @app.route("/", methods=["GET"])
 def root():
     return "Bot is running!"
 
+if __name__ == "__main__":
+    PORT = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=PORT)
