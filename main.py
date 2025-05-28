@@ -1,181 +1,118 @@
-import asyncio
-import json
-from pathlib import Path
-from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup
+import os
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from aiohttp import web
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))  # আপনার Admin Telegram User ID
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
-)
 
-# ====== Config ======
-BOT_TOKEN = "8167950944:AAENH9u3oP-H_Ht63Cqn9BI7xYvBeCWVUXs"
-ADMIN_ID = 6165060012
-PERMISSION_FILE = "permissions.json"
-
-# ====== Load/Save Permissions ======
-def load_permissions():
-    path = Path(PERMISSION_FILE)
-    if path.exists():
-        with open(path, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_permissions(data):
-    with open(PERMISSION_FILE, "w") as f:
-        json.dump(data, f)
-
-active_permissions = load_permissions()
-
-# ====== Subscription Plans ======
-plans = {
-    "free": {"label": "⬜ 1 Hour - Free 🌸", "duration": 1, "price": 0},
-    "1d": {"label": "🔴 1 Day - 2$", "duration": 24, "price": 2},
-    "7d": {"label": "🟠 7 Day - 10$", "duration": 168, "price": 10},
-    "15d": {"label": "🟡 15 Day - 15$", "duration": 360, "price": 15},
-    "30d": {"label": "🟢 30 Day - 20$", "duration": 720, "price": 20},
-}
-
-free_trial_users = set()  # Keep track who took free trial
-
-def get_main_buttons():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(plans["free"]["label"], callback_data="free")],
-        [InlineKeyboardButton(plans["1d"]["label"], callback_data="1d")],
-        [InlineKeyboardButton(plans["7d"]["label"], callback_data="7d")],
-        [InlineKeyboardButton(plans["15d"]["label"], callback_data="15d")],
-        [InlineKeyboardButton(plans["30d"]["label"], callback_data="30d")],
-    ])
-
-# ====== Handlers ======
+# একটা সিম্পল স্টোরেজ (ডাটাবেস নয়, সেশন হিসেবে)
+user_permissions = {}
+free_trial_users = set()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    chat_id = update.effective_chat.id
-    user_id_str = str(user.id)
+    user_id = update.effective_user.id
+    user_name = update.effective_user.full_name
 
-    # Check active permission from JSON file
-    if active_permissions.get(user_id_str):
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"{user.first_name} Subscription চালু আছে ✅\nএবার Log In করুন।",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("Login 🔑", callback_data="login")]
-            ])
-        )
+    if user_id in user_permissions and user_permissions[user_id] == "subscribed":
+        # Already subscribed user
+        keyboard = [[InlineKeyboardButton("Login 🔑", callback_data="login")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(f"{user_name}, আপনার Subscription চালু আছে। এখন Login করুন।", reply_markup=reply_markup)
+    elif user_id in free_trial_users:
+        await update.message.reply_text("আপনার Free Trial ইতিমধ্যে চালু আছে।")
+    else:
+        keyboard = [
+            [InlineKeyboardButton("⬜ 1 Hour - Free 🌸", callback_data="free_trial")],
+            [InlineKeyboardButton("🔴 1 Day - 2$", callback_data="1_day")],
+            [InlineKeyboardButton("🟠 7 Day - 10$", callback_data="7_day")],
+            [InlineKeyboardButton("🟡 15 Day - 15$", callback_data="15_day")],
+            [InlineKeyboardButton("🟢 30 Day - 20$", callback_data="30_day")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(f"Welcome {user_name} 🌸\nআপনি কোনটি নিতে চাচ্ছেন..?", reply_markup=reply_markup)
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    user_name = query.from_user.full_name
+    username = query.from_user.username or "NoUsername"
+
+    if query.data == "free_trial":
+        if user_id in free_trial_users:
+            await query.edit_message_text("আপনি ইতিমধ্যে Free Trial ব্যবহার করেছেন।")
+            return
+        free_trial_users.add(user_id)
+        user_permissions[user_id] = "free_trial"
+        await query.edit_message_text("আপনার Free Trial Subscription টি চালু হয়েছে ✅")
+        # TODO: এখানে ফ্রি ট্রায়াল সময় শেষ হলে মেসেজ পাঠানো এবং permission বাতিল করার লজিক যোগ করতে হবে
         return
 
-    # No active permission: show subscription list
-    msg = await update.message.reply_text(
-        f"Welcome ×͜× ✿𝙴𝚅𝙰𝙽✿ ×͜× 🌸\nআপনি কোনটি নিতে চাচ্ছেন..?",
-        reply_markup=get_main_buttons()
-    )
-    context.user_data['menu_msg_id'] = msg.message_id
+    # If user clicked on paid subscription
+    plans = {
+        "1_day": ("1 Day", 2),
+        "7_day": ("7 Day", 10),
+        "15_day": ("15 Day", 15),
+        "30_day": ("30 Day", 20),
+    }
 
-async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = query.from_user
-    chat_id = query.message.chat_id
-    plan_key = query.data
-    user_id_str = str(user.id)
+    if query.data in plans:
+        plan_name, amount = plans[query.data]
+        # Admin কে মেসেজ পাঠানোর লজিক (Bot এ নিজেই)
+        msg = (
+            f"🔆 User Name : {user_name}\n"
+            f"🔆 User Id : {user_id}\n"
+            f"🔆 Username : @{username}\n\n"
+            f"Subscription নিতে চাচ্ছে: {plan_name} - ${amount}"
+        )
+        await context.bot.send_message(chat_id=ADMIN_ID, text=msg, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("APPROVE ✅", callback_data=f"approve_{user_id}"),
+             InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel_{user_id}")]
+        ]))
+        await query.edit_message_text("Admin কে Subscription অনুরোধ পাঠানো হয়েছে। অনুগ্রহ করে অপেক্ষা করুন।")
 
-    # Delete button message with inline buttons
-    await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
-
-    # Free trial logic
-    if plan_key == "free":
-        if user_id_str in free_trial_users:
-            await context.bot.send_message(chat_id=chat_id, text="❌ আপনি আগে থেকেই Free Trial ব্যবহার করেছেন!")
+    # Approve or Cancel by admin
+    if query.data.startswith("approve_") or query.data.startswith("cancel_"):
+        if query.from_user.id != ADMIN_ID:
+            await query.answer("আপনি এ কাজ করার অনুমতি পাচ্ছেন না!", show_alert=True)
             return
+        target_user_id = int(query.data.split("_")[1])
+        if query.data.startswith("approve_"):
+            user_permissions[target_user_id] = "subscribed"
+            await context.bot.send_message(chat_id=target_user_id, text="আপনার Subscription অনুমোদিত হয়েছে। Login করুন।")
+            await query.edit_message_text("Subscription Approved ✅")
+        else:
+            await context.bot.send_message(chat_id=target_user_id, text="Subscription অনুরোধ বাতিল করা হয়েছে।")
+            await query.edit_message_text("Subscription Cancelled ❌")
 
-        active_permissions[user_id_str] = True
-        save_permissions(active_permissions)
+    if query.data == "login":
+        await query.edit_message_text("Login করার ব্যবস্থা এখানে দিবেন।")
 
-        free_trial_users.add(user_id_str)
+async def handle_update(request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.update_queue.put(update)
+    return web.Response(text="OK")
 
-        await context.bot.send_message(chat_id=chat_id, text="✅ আপনার Free Trial Subscription টি চালু হয়েছে!")
-
-        # Wait for free trial duration (1 hour)
-        await asyncio.sleep(plans["free"]["duration"] * 3600)
-
-        # Remove permission after trial ends
-        active_permissions.pop(user_id_str, None)
-        save_permissions(active_permissions)
-        await context.bot.send_message(chat_id=chat_id, text="🌻 আপনার Free Trial টি শেষ হতে যাচ্ছে।")
-
-    # Paid plan logic
-    elif plan_key in plans:
-        plan = plans[plan_key]
-
-        # Notify admin with approve/cancel buttons
-        admin_msg = await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"""(User {user.full_name}) {plan['duration']} ঘণ্টার Subscription নিতে চাচ্ছে।
-
-🔆 User Name: {user.full_name}
-🔆 User Id: {user.id}
-🔆 Username: @{user.username or 'N/A'}""",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("APPROVE ✅", callback_data=f"approve:{user.id}:{plan_key}"),
-                    InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel:{user.id}")
-                ]
-            ])
-        )
-        context.user_data[f"admin_msg_{user.id}"] = admin_msg.message_id
-
-        # Ask user to pay
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=f"""Please send ${plan['price']} to Binance Pay ID: 
-পেমেন্ট করে প্রমাণ হিসাবে Admin এর কাছে স্কিনশর্ট অথবা transaction ID দিন @Mr_Evan3490
-
-Your payment details:
-🆔 User ID: {user.id}
-👤 Username: @{user.username or 'N/A'}
-📋 Plan: {plan['label']}
-💰 Amount: ${plan['price']}"""
-        )
-
-async def admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    if data.startswith("approve"):
-        _, uid_str, plan_key = data.split(":")
-        uid = int(uid_str)
-
-        active_permissions[uid_str] = True
-        save_permissions(active_permissions)
-
-        await query.edit_message_text(f"✅ APPROVED for User ID: {uid}")
-        await context.bot.send_message(chat_id=uid, text="🎉 আপনার Subscription Approved হয়েছে!")
-
-    elif data.startswith("cancel"):
-        _, uid_str = data.split(":")
-        uid = int(uid_str)
-
-        await query.edit_message_text(f"❌ Subscription Cancelled for User ID: {uid}")
-        await context.bot.send_message(chat_id=uid, text="❌ আপনার Subscription Cancelled হয়েছে।")
-
-async def login_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = query.from_user
-    chat_id = query.message.chat_id
-
-    await context.bot.send_message(chat_id=chat_id, text="🔑 লগইন সফল হয়েছে।")
-
-# ====== Main ======
 if __name__ == "__main__":
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    from aiohttp import web
+    import asyncio
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(handle_button, pattern="^(free|1d|7d|15d|30d)$"))
-    app.add_handler(CallbackQueryHandler(admin_action, pattern="^(approve|cancel):"))
-    app.add_handler(CallbackQueryHandler(login_handler, pattern="^login$"))
+    application = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_handler))
 
-    print("Bot is running...")
-    app.run_polling()
+    web_app = web.Application()
+    web_app.router.add_post(f"/{BOT_TOKEN}", handle_update)
+
+    port = int(os.environ.get("PORT", "10000"))
+
+    logging.info(f"Starting server on port {port}")
+
+    web.run_app(web_app, host="0.0.0.0", port=port)
