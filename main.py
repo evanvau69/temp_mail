@@ -1,21 +1,20 @@
 import os
 import logging
 import asyncio
+import aiohttp
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set this in Render Environment
-ADMIN_ID = os.getenv("ADMIN_ID")    # Admin chat ID (set this in Render Environment)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
-# Initialize logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# In-memory user database
 free_trial_users = {}
+user_sessions = {}
 
-# Start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.full_name
@@ -37,7 +36,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(f"Welcome {user_name} 🌸\nআপনি কোনটি নিতে চাচ্ছেন..?", reply_markup=reply_markup)
 
-# Callback handler
+async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if free_trial_users.get(user_id) == "active":
+        keyboard = [[InlineKeyboardButton("Login 🔑", callback_data="login")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("আপনার Subscription চালু আছে, নিচে Login করুন ⬇️", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -53,13 +60,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.delete()
             await context.bot.send_message(chat_id=user_id, text="✅ আপনার Free Trial Subscription টি চালু হয়েছে")
 
-            # Auto revoke after 1 hour
             async def revoke():
                 await asyncio.sleep(3600)
                 free_trial_users.pop(user_id, None)
                 await context.bot.send_message(chat_id=user_id, text="🌻 আপনার Free Trial টি শেষ হতে যাচ্ছে")
             asyncio.create_task(revoke())
-    else:
+
+    elif query.data.startswith("plan_"):
         plan_info = {
             "plan_1d": ("1 Day", "2$"),
             "plan_7d": ("7 Day", "10$"),
@@ -83,10 +90,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.delete()
         await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=reply_markup)
 
-        # Notify user with payment instruction
         payment_msg = (
-            f"Please send ${price} to Binance Pay ID: \
-পেমেন্ট করে প্রমান হিসাবে Admin এর কাছে স্ক্রিনশর্ট অথবা transaction ID দিন @Mr_Evan3490\n\n"
+            f"Please send ${price} to Binance Pay ID: \nপেমেন্ট করে প্রমান হিসাবে Admin এর কাছে স্কিনশর্ট অথবা transaction ID দিন @Mr_Evan3490\n\n"
             f"Your payment details:\n"
             f"🆔 User ID: {user_id}\n"
             f"👤 Username: @{username}\n"
@@ -95,47 +100,80 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id=user_id, text=payment_msg)
 
-# Approve/Cancel callback from admin
-async def handle_admin_response(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
+    elif query.data == "login":
+        await context.bot.send_message(chat_id=user_id, text="আপনার Sid এবং Auth Token দিন 🎉\n\nব্যবহার হবে: `<sid> <auth>`", parse_mode='Markdown')
 
-    if data.startswith("approve_"):
-        user_id = int(data.split("_")[1])
-        free_trial_users[user_id] = "active"
-        await context.bot.send_message(chat_id=user_id, text="✅ আপনার Subscription চালু করা হয়েছে")
+    elif query.data.startswith("approve_"):
+        uid = int(query.data.split("_")[1])
+        free_trial_users[uid] = "active"
+        await context.bot.send_message(chat_id=uid, text="✅ আপনার Subscription চালু করা হয়েছে")
         await query.edit_message_text("✅ Approve করা হয়েছে এবং Permission দেওয়া হয়েছে।")
-    elif data.startswith("cancel_"):
+
+    elif query.data.startswith("cancel_"):
         await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
 
-# Webhook handler
+async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if free_trial_users.get(user_id) != "active":
+        return
+
+    try:
+        sid, auth = update.message.text.strip().split(" ", 1)
+    except:
+        await update.message.reply_text("⚠️ সঠিকভাবে Sid এবং Auth দিন, উদাহরণ: `<sid> <auth>`", parse_mode='Markdown')
+        return
+
+    async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
+        async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
+            if resp.status == 401:
+                await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
+                return
+            data = await resp.json()
+            account_name = data['accounts'][0]['friendly_name']
+            balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
+
+        async with session.get(balance_url) as b:
+            balance_data = await b.json()
+            balance = float(balance_data.get("balance", 0.0))
+            currency = balance_data.get("currency", "USD")
+
+            if currency != "USD":
+                rate_url = f"https://open.er-api.com/v6/latest/{currency}"
+                async with session.get(rate_url) as rate_resp:
+                    rates = await rate_resp.json()
+                    usd_rate = rates["rates"].get("USD", 1)
+                    balance = balance * usd_rate
+
+            await update.message.reply_text(
+                f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
+                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
+                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
+                f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
+                f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
+            )
+
 async def handle_update(request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
     await application.update_queue.put(update)
     return web.Response(text="OK")
 
-# Application setup
 application = Application.builder().token(BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
-application.add_handler(CallbackQueryHandler(handle_callback, pattern="^plan_"))
-application.add_handler(CallbackQueryHandler(handle_admin_response, pattern="^(approve_|cancel_)"))
+application.add_handler(CommandHandler("login", login_command))
+application.add_handler(CallbackQueryHandler(handle_callback))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
 
-# Main function
 async def main():
     await application.initialize()
     await application.start()
-
     app = web.Application()
     app.router.add_post(f"/{BOT_TOKEN}", handle_update)
-
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.environ.get("PORT", 10000))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-
     logger.info("Bot is running via webhook...")
     await asyncio.Event().wait()
 
