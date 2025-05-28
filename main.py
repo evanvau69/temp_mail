@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import aiohttp
-import re
+import random
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -23,7 +23,7 @@ paid_subscriptions = {}    # user_id: {"plan": plan_name, "active": True}
 user_sessions = {}         # user_id: {"sid": "", "auth": ""}
 user_buy_messages = {}     # user_id: message_id (নাম্বার লিস্ট মেসেজ)
 
-# কানাডার নম্বরের একটা উদাহরণ লিস্ট (প্লাস কোড ছাড়া, শুধু নম্বর)
+# কানাডার নম্বরের একটা উদাহরণ লিস্ট (প্লাস কোডসহ)
 canada_numbers = [
     "+12015550101", "+12015550102", "+12015550103", "+12015550104",
     "+12015550105", "+12015550106", "+12015550107", "+12015550108",
@@ -163,9 +163,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ==== Buy Button ====
     if query.data.startswith("buy_"):
-        # data format: buy_<number>
         number = query.data[4:]
-        # Check balance and token status from session
         session = user_sessions.get(user_id)
         if not session:
             await query.answer("❌ আপনি লগইন করেননি। /login দিন।", show_alert=True)
@@ -174,8 +172,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sid = session.get("sid")
         auth = session.get("auth")
 
-        # Simulate buying number: এখানে আসল লজিক দিতে হবে যেমন DB এ সেভ বা API কল
-        # আগের Buy মেসেজ ডিলিট করা হবে
         if user_buy_messages.get(user_id):
             try:
                 await context.bot.delete_message(chat_id=user_id, message_id=user_buy_messages[user_id])
@@ -194,116 +190,85 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # ===========================
-# /buy কমান্ড: কানাডার নাম্বার লিস্ট দেখাবে
+# /buy কমান্ড: কানাডার নাম্বার লিস্ট দেখাবে (Area code অপশন সহ)
 # ===========================
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # সাবস্ক্রিপশন চেক
     if not (paid_subscriptions.get(user_id, {}).get("active") or free_trial_users.get(user_id) == "active"):
         await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে /start এ গিয়ে Subscription নিন।")
         return
 
-    # আগের Buy মেসেজ থাকলে ডিলিট কর
     if user_buy_messages.get(user_id):
         try:
             await context.bot.delete_message(chat_id=user_id, message_id=user_buy_messages[user_id])
         except:
             pass
 
-    # **নাম্বারগুলো টেক্সট আকারে পাঠাও (প্লাস ওয়ান বাদ দিয়ে)**
-    numbers_text = "\n".join(num.replace("+1", "") for num in canada_numbers[:20])
-    await update.message.reply_text(f"Canada এর নাম্বার লিস্ট (২০ টি):\n\n{numbers_text}")
+    args = context.args
+    if args:
+        area_code = args[0]
+        # কানাডার নম্বর থেকে ফিল্টার করব, প্লাস ওয়ান বাদ দিয়ে পরে area_code চেক করব
+        filtered_numbers = [num for num in canada_numbers if num[2:2+len(area_code)] == area_code]
+        if not filtered_numbers:
+            await update.message.reply_text(f"Area code '{area_code}' এর জন্য কোন নাম্বার পাওয়া যায়নি।")
+            return
+        numbers_to_show = filtered_numbers[:20]
+    else:
+        numbers_to_show = random.sample(canada_numbers, k=20)
 
-    # নাম্বার বাটন তৈরি করা
+    numbers_text = "\n".join(numbers_to_show)
+    await update.message.reply_text(f"নিচে নাম্বার লিস্ট (২০ টি):\n\n{numbers_text}")
+
     keyboard = []
-    for num in canada_numbers[:20]:  # প্রথম ২০ নাম্বার
-        kb_num = num.replace("+1", "")  # প্লাস ওয়ান বাদ দিয়ে দেখানো
-        keyboard.append([InlineKeyboardButton(kb_num, callback_data=f"buy_{num}")])
+    for num in numbers_to_show:
+        keyboard.append([InlineKeyboardButton(num, callback_data=f"buy_{num}")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     sent = await update.message.reply_text("নিচের নাম্বার গুলোর মধ্যে একটি সিলেক্ট করুন:", reply_markup=reply_markup)
     user_buy_messages[user_id] = sent.message_id
-# ========================
-# Sid/Auth Token হ্যান্ডলার
-# ========================
-async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# ===========================
+# /sid <sid> <auth> কমান্ড দিয়ে লগইন
+# ===========================
+async def sid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    text = update.message.text.strip()
-
-    if not (paid_subscriptions.get(user_id, {}).get("active") or free_trial_users.get(user_id) == "active"):
+    if len(context.args) != 2:
+        await update.message.reply_text("❌ ভুল ফরম্যাট! ব্যবহার করুন:\n/sid <sid> <auth>")
         return
 
-    try:
-        sid, auth = text.split(" ", 1)
-    except Exception:
-        await update.message.reply_text("⚠️ সঠিকভাবে Sid এবং Auth দিন, উদাহরণ: `<sid> <auth>`", parse_mode='Markdown')
-        return
+    sid, auth = context.args
+    user_sessions[user_id] = {"sid": sid, "auth": auth}
+    await update.message.reply_text("✅ লগইন সফল হয়েছে!")
 
-    async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
-        async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
-            if resp.status == 401:
-                await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
-                return
-            data = await resp.json()
-            account_name = data['accounts'][0]['friendly_name']
-            balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
+# ======================
+# /help কমান্ড হ্যান্ডলার
+# ======================
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "/start - Subscription নিন\n"
+        "/login - লগইন করুন\n"
+        "/buy [area_code] - নাম্বার কিনুন (কানাডার)\n"
+        "/sid <sid> <auth> - লগইন তথ্য দিন\n"
+        "/help - সাহায্য"
+    )
+    await update.message.reply_text(help_text)
 
-        async with session.get(balance_url) as b:
-            balance_data = await b.json()
-            balance = float(balance_data.get("balance", 0.0))
-            currency = balance_data.get("currency", "USD")
+# ======================
+# মেইন ফাংশন, বট শুরু
+# ======================
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
 
-            if currency != "USD":
-                rate_url = f"https://open.er-api.com/v6/latest/{currency}"
-                async with session.get(rate_url) as rate_resp:
-                    rates = await rate_resp.json()
-                    usd_rate = rates["rates"].get("USD", 1)
-                    balance = balance * usd_rate
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("login", login_command))
+    app.add_handler(CommandHandler("buy", buy_command))
+    app.add_handler(CommandHandler("sid", sid_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CallbackQueryHandler(handle_callback))
 
-            user_sessions[user_id] = {"sid": sid, "auth": auth}
-            await update.message.reply_text(
-                f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
-                f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
-                f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
-            )
-
-# ====================
-# Webhook হ্যান্ডলার
-# ====================
-async def handle_update(request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return web.Response(text="OK")
-
-# ====================
-# Application সেটআপ
-# ====================
-application = Application.builder().token(BOT_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("login", login_command))
-application.add_handler(CommandHandler("buy", buy_command))
-application.add_handler(CallbackQueryHandler(handle_callback))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
-
-# ====================
-# Run Webhook
-# ====================
-async def main():
-    await application.initialize()
-    await application.start()
-    app = web.Application()
-    app.router.add_post(f"/{BOT_TOKEN}", handle_update)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("Bot is running via webhook...")
-    await asyncio.Event().wait()
+    logger.info("Bot Started...")
+    app.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
