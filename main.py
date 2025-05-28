@@ -215,11 +215,31 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if free_trial_users.get(user_id) != "active":
         await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
         return
-    numbers = generate_random_canadian_numbers()
+
+    if len(context.args) == 0:
+        await update.message.reply_text("দয়া করে Area Code দিন, উদাহরণ: /buy 416")
+        return
+
+    areacode = context.args[0]
+    if not areacode.isdigit() or len(areacode) != 3:
+        await update.message.reply_text("সঠিক ৩ ডিজিটের Area Code দিন।")
+        return
+
+    # এখানে শুধু সেই Area Code এর নাম্বার তৈরি করবো
+    def generate_numbers_with_areacode(count=30, code=areacode):
+        numbers = []
+        for _ in range(count):
+            number = f"+1{code}{randint(1000000, 9999999)}"
+            numbers.append(number)
+        return numbers
+
+    numbers = generate_numbers_with_areacode()
     user_sessions[user_id] = user_sessions.get(user_id, {})
     user_sessions[user_id]["numbers"] = numbers
-    msg = "আপনার নাম্বার গুলো হলো 👇👇\n" + "\n".join(numbers)
+
+    msg = f"আপনার Area Code {areacode} এর নাম্বার গুলো 👇👇\n" + "\n".join(numbers)
     await update.message.reply_text(msg)
+
 
 async def handle_number_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
