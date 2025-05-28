@@ -28,7 +28,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("আপনার Free Trial ইতিমধ্যে চালু আছে।")
     else:
         keyboard = [
-            [InlineKeyboardButton("⬜ 1 Hour - Free 🌸", callback_data="free_trial")],
+            [InlineKeyboardButton(" 1 Hour - Free 🌸", callback_data="free_trial")],
             [InlineKeyboardButton("🔴 1 Day - 2$", callback_data="1_day")],
             [InlineKeyboardButton("🟠 7 Day - 10$", callback_data="7_day")],
             [InlineKeyboardButton("🟡 15 Day - 15$", callback_data="15_day")],
