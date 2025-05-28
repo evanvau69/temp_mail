@@ -2,17 +2,18 @@ import os
 import logging
 import asyncio
 import aiohttp
-import random
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, ContextTypes, CallbackQueryHandler,
     MessageHandler, filters
 )
+import random
 
 # Environment Variables (Render এ environment থেকে বসাতে হবে)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
+PORT = int(os.getenv("PORT", "10000"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ paid_subscriptions = {}    # user_id: {"plan": plan_name, "active": True}
 user_sessions = {}         # user_id: {"sid": "", "auth": ""}
 user_buy_messages = {}     # user_id: message_id (নাম্বার লিস্ট মেসেজ)
 
-# কানাডার নম্বরের একটা উদাহরণ লিস্ট (প্লাস কোডসহ)
+# কানাডার নম্বরের একটা উদাহরণ লিস্ট (প্লাস কোড সহ, +1 থাকবে)
 canada_numbers = [
     "+12015550101", "+12015550102", "+12015550103", "+12015550104",
     "+12015550105", "+12015550106", "+12015550107", "+12015550108",
@@ -163,7 +164,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ==== Buy Button ====
     if query.data.startswith("buy_"):
+        # data format: buy_<number>
         number = query.data[4:]
+        # Check balance and token status from session
         session = user_sessions.get(user_id)
         if not session:
             await query.answer("❌ আপনি লগইন করেননি। /login দিন।", show_alert=True)
@@ -172,6 +175,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sid = session.get("sid")
         auth = session.get("auth")
 
+        # আগের Buy মেসেজ ডিলিট করা হবে
         if user_buy_messages.get(user_id):
             try:
                 await context.bot.delete_message(chat_id=user_id, message_id=user_buy_messages[user_id])
@@ -190,101 +194,98 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 # ===========================
-# /buy কমান্ড: কানাডার নাম্বার লিস্ট দেখাবে (Area code অপশন সহ)
+# /buy কমান্ড: কানাডার নাম্বার লিস্ট দেখাবে
 # ===========================
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
+    # সাবস্ক্রিপশন চেক
     if not (paid_subscriptions.get(user_id, {}).get("active") or free_trial_users.get(user_id) == "active"):
         await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে /start এ গিয়ে Subscription নিন।")
         return
 
+    # আগের Buy মেসেজ থাকলে ডিলিট কর
     if user_buy_messages.get(user_id):
         try:
             await context.bot.delete_message(chat_id=user_id, message_id=user_buy_messages[user_id])
         except:
             pass
 
-    args = context.args
-    if args:
-        area_code = args[0]
-        # কানাডার নম্বর থেকে ফিল্টার করব, প্লাস ওয়ান বাদ দিয়ে পরে area_code চেক করব
+    # ইউজার যদি /buy <area_code> পাঠায়, তখন সেই কোড এর নাম্বার দেখাবে, না হলে র‍্যান্ডম কানাডিয়ান নাম্বার দেখাবে
+    text = update.message.text.strip()
+    area_code = None
+    parts = text.split()
+    if len(parts) > 1 and parts[1].isdigit():
+        area_code = parts[1]
+
+    filtered_numbers = []
+    if area_code:
         filtered_numbers = [num for num in canada_numbers if num[2:2+len(area_code)] == area_code]
-        if not filtered_numbers:
-            await update.message.reply_text(f"Area code '{area_code}' এর জন্য কোন নাম্বার পাওয়া যায়নি।")
-            return
-        numbers_to_show = filtered_numbers[:20]
     else:
-        numbers_to_show = random.sample(canada_numbers, k=20)
+        # র‍্যান্ডম ২০ নাম্বার নেওয়া (যদিও total ৩০ আছে)
+        filtered_numbers = random.sample(canada_numbers, 20)
 
-    numbers_text = "\n".join(numbers_to_show)
-    await update.message.reply_text(f"নিচে নাম্বার লিস্ট (২০ টি):\n\n{numbers_text}")
-
+    # নাম্বার বাটন তৈরি করা
     keyboard = []
-    for num in numbers_to_show:
-        keyboard.append([InlineKeyboardButton(num, callback_data=f"buy_{num}")])
+    for num in filtered_numbers:
+        kb_num = num  # +1 সহ নাম্বার দেখাবো
+        keyboard.append([InlineKeyboardButton(kb_num, callback_data=f"buy_{num}")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     sent = await update.message.reply_text("নিচের নাম্বার গুলোর মধ্যে একটি সিলেক্ট করুন:", reply_markup=reply_markup)
     user_buy_messages[user_id] = sent.message_id
 
-# ===========================
-# /sid <sid> <auth> কমান্ড দিয়ে লগইন
-# ===========================
-async def sid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =============================
+# /login এর পর Sid Auth সেট করা
+# =============================
+async def sid_auth_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if len(context.args) != 2:
-        await update.message.reply_text("❌ ভুল ফরম্যাট! ব্যবহার করুন:\n/sid <sid> <auth>")
+    if not (paid_subscriptions.get(user_id, {}).get("active") or free_trial_users.get(user_id) == "active"):
+        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
         return
 
-    sid, auth = context.args
+    text = update.message.text.strip()
+    parts = text.split()
+    if len(parts) != 2:
+        await update.message.reply_text("❌ ভুল ফরম্যাট! ঠিকমত `sid` এবং `auth` দিন। উদাহরণ: `12345 abcdefg`")
+        return
+
+    sid, auth = parts
     user_sessions[user_id] = {"sid": sid, "auth": auth}
-    await update.message.reply_text("✅ লগইন সফল হয়েছে!")
+    await update.message.reply_text("✅ আপনার লগইন তথ্য সংরক্ষিত হয়েছে। এখন /buy দিন নাম্বার দেখার জন্য।")
 
-# ======================
-# /help কমান্ড হ্যান্ডলার
-# ======================
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
-        "/start - Subscription নিন\n"
-        "/login - লগইন করুন\n"
-        "/buy [area_code] - নাম্বার কিনুন (কানাডার)\n"
-        "/sid <sid> <auth> - লগইন তথ্য দিন\n"
-        "/help - সাহায্য"
-    )
-    await update.message.reply_text(help_text)
+# ===========================
+# Bot এর Main Function
+# ===========================
+async def main():
+    application = Application.builder().token(BOT_TOKEN).build()
 
-# ======================
-# মেইন ফাংশন, বট শুরু
-# ======================
-def main():
-    app = Application.builder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("login", login_command))
+    application.add_handler(CommandHandler("buy", buy_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, sid_auth_handler))
+    application.add_handler(CallbackQueryHandler(handle_callback))
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("login", login_command))
-    app.add_handler(CommandHandler("buy", buy_command))
-    app.add_handler(CommandHandler("sid", sid_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CallbackQueryHandler(handle_callback))
+    # Webhook সেটআপ
+    async def on_startup(app):
+        webhook_url = f"https://YOUR_DOMAIN_HERE/{BOT_TOKEN}"
+        await application.bot.set_webhook(webhook_url)
 
-    from aiohttp import web
-from telegram.ext import Application
+    app = web.Application()
+    app.router.add_post(f"/{BOT_TOKEN}", application.bot_webhook_handler)
 
-PORT = int(os.getenv("PORT", "8443"))
+    # Background টাস্ক চালাতে চাইলে এখানে দিতে পারো
+    # await on_startup(app)
 
-async def handle(request):
-    # হ্যান্ডলার ফাংশন
-    pass
+    # ওয়েব সার্ভার চালানো
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
 
-app = Application.builder().token(BOT_TOKEN).build()
-
-web_app = web.Application()
-web_app.router.add_post(f"/{BOT_TOKEN}", app.bot_webhook_handler)
-
-web.run_app(web_app, port=PORT)
-
-    logger.info("Bot Started...")
-    app.run_polling()
+    logger.info(f"Bot webhook server started on port {PORT}")
+    # Run telegram bot (run_forever)
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
