@@ -267,6 +267,22 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CallbackQueryHandler(handle_callback))
 
+    from aiohttp import web
+from telegram.ext import Application
+
+PORT = int(os.getenv("PORT", "8443"))
+
+async def handle(request):
+    # হ্যান্ডলার ফাংশন
+    pass
+
+app = Application.builder().token(BOT_TOKEN).build()
+
+web_app = web.Application()
+web_app.router.add_post(f"/{BOT_TOKEN}", app.bot_webhook_handler)
+
+web.run_app(web_app, port=PORT)
+
     logger.info("Bot Started...")
     app.run_polling()
 
