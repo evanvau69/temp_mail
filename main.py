@@ -15,11 +15,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 free_trial_users = {}
-user_sessions = {}  # ইউজারের লগইন স্টেট রাখবে: {"logged_in": True/False, "sid": "...", "auth": "..."}
+user_sessions = {}
 
-CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438',
-                     '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709',
-                     '778', '780', '782', '807', '819', '825', '867', '873', '902', '905']
+CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780', '782', '807', '819', '825', '867', '873', '902', '905']
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -53,10 +51,16 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    # চেক লগইন
+
+    # Check if user has active subscription
+    if free_trial_users.get(user_id) != "active":
+        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
+        return
+
+    # Check if user has logged in with valid token
     session = user_sessions.get(user_id)
     if not session or not session.get("logged_in", False):
-        await update.message.reply_text("❌ দয়া করে প্রথমে /login দিয়ে Token দিয়ে Log In করুন।")
+        await update.message.reply_text("❌ দয়া করে প্রথমে /login দিয়ে Token দিয়ে Log In করুন।")
         return
 
     args = context.args
@@ -65,7 +69,7 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         area_code = args[0]
         if area_code in CANADA_AREA_CODES:
-            selected_area_codes = [area_code] * 30  # একই কোড ৩০ বার
+            selected_area_codes = [area_code] * 30  # ৩০ নাম্বার একই area code দিয়ে
         else:
             await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
             return
@@ -79,21 +83,25 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone_numbers.append(number)
 
     message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
-    buttons = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in phone_numbers]
+
+    buttons = []
+    for num in phone_numbers:
+        buttons.append([InlineKeyboardButton(num, callback_data=f"number_{num}")])
+
     buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
     reply_markup = InlineKeyboardMarkup(buttons)
 
-    msg = await update.message.reply_text(message_text, reply_markup=reply_markup)
+    sent_msg = await update.message.reply_text(message_text, reply_markup=reply_markup)
 
-    # ৫ মিনিট পর মেসেজ ডিলিটের জন্য asyncio টাস্ক
-    async def delete_message_later(chat_id, message_id):
+    # Auto delete after 5 minutes (300 seconds)
+    async def delete_message():
         await asyncio.sleep(300)
         try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except Exception as e:
-            logger.warning(f"Failed to delete message: {e}")
+            await sent_msg.delete()
+        except:
+            pass
 
-    asyncio.create_task(delete_message_later(update.effective_chat.id, msg.message_id))
+    asyncio.create_task(delete_message())
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -168,19 +176,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("number_"):
         selected_number = query.data[len("number_"):]
-        # ইউজারের জন্য Buy বাটন সহ মেসেজ পাঠানো
-        buttons = [[InlineKeyboardButton("Buy 💰", callback_data=f"buy_{selected_number}")]]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await context.bot.send_message(chat_id=user_id, text=f"আপনি নির্বাচন করেছেন: {selected_number}", reply_markup=reply_markup)
+        # Send message with number and Buy button
+        buy_button = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{selected_number}")]])
+        await context.bot.send_message(chat_id=user_id, text=f"{selected_number}", reply_markup=buy_button)
 
-    elif query.data.startswith("buy_"):
-        number_to_buy = query.data[len("buy_"):]
-        await context.bot.send_message(chat_id=user_id, text=f"🎉 আপনি নাম্বার কিনতে যাচ্ছেন: {number_to_buy}\n\nঅনুগ্রহ করে পেমেন্ট সম্পন্ন করুন এবং Admin কে জানান।")
+    elif query.data.startswith("buy_number_"):
+        # এখানে আপনি চাইলে আরো Buy করার লজিক যোগ করতে পারেন
+        number_to_buy = query.data[len("buy_number_"):]
+        await context.bot.send_message(chat_id=user_id, text=f"আপনি এই নাম্বারটি কিনতে চান: {number_to_buy}\n\nকিনার প্রক্রিয়া এখানে যোগ করুন।")
 
 async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if free_trial_users.get(user_id) != "active":
+        return
 
-    # টোকেন সাসপেন্ড হলে লগইন স্টেট False করে দিবো
     try:
         sid, auth = update.message.text.strip().split(" ", 1)
     except:
@@ -190,7 +199,6 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
         async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
             if resp.status == 401:
-                user_sessions[user_id] = {"logged_in": False, "sid": None, "auth": None}
                 await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
                 return
             data = await resp.json()
@@ -209,74 +217,90 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     usd_rate = rates["rates"].get("USD", 1)
                     balance = balance * usd_rate
 
-            # লগইন স্টেট সেট করা
-            user_sessions[user_id] = {"logged_in": True, "sid": sid, "auth": auth}
+            user_sessions[user_id] = {"sid": sid, "auth": auth, "logged_in": True}
 
             await update.message.reply_text(
                 f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
                 f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f} USD\n\n"
-                f"✅ এখন আপনি /buy কমান্ড ব্যবহার করতে পারবেন।"
+                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
+                f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
+                f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
             )
 
-def extract_canadian_numbers(text):
-    numbers_found = []
-    cleaned_text = re.sub(r"[^\d+]", " ", text)
-    possible_numbers = cleaned_text.split()
+# ====== নতুন ফাংশন: টেক্সট থেকে কানাডার নাম্বার বের করার জন্য ======
+def extract_canada_numbers(text: str):
+    """
+    টেক্সটের মধ্যে থেকে কানাডার নাম্বার গুলো বের করবে
+    নমুনা ফরম্যাট: +1 4161234567, 416-123-4567, 1-416-123-4567, 4161234567 ইত্যাদি
+    """
+    # কানাডার area codes regex pattern (leading +1 optional)
+    area_code_pattern = "(" + "|".join(CANADA_AREA_CODES) + ")"
+    # নম্বর 7 digit (ব্যবহারকারীর convenience এর জন্য - বা space সহ মেনাজড)
+    number_pattern = r"\d{7}"
+    
+    # সম্পূর্ণ নম্বর: optional +1 বা 1, পরে area code, পরে 7 digit নম্বর, মাঝে - বা space থাকতে পারে
+    pattern = re.compile(rf"(?:\+?1[- ]?)?{area_code_pattern}[- ]?\d{{3}}[- ]?\d{{4}}")
+    
+    matches = pattern.findall(text)
+    
+    # matches শুধুমাত্র area code রিটার্ন করে তাই পুরো ম্যাচ করতে নিচের পদ্ধতি ব্যবহার করছি
+    full_matches = pattern.finditer(text)
+    
+    results = []
+    for m in full_matches:
+        # Normalize number: +1 + area code + 7 digit without separators
+        raw_num = m.group()
+        digits = re.sub(r"\D", "", raw_num)  # শুধু digit রাখবে
+        # যদি startswith 1 না থাকে তাহলে +1 add করবে
+        if not digits.startswith("1"):
+            digits = "1" + digits
+        # ফাইনাল ফরম্যাট +1XXXXXXXXXX
+        formatted = "+" + digits
+        results.append(formatted)
+    return results
 
-    for num in possible_numbers:
-        cleaned_num = re.sub(r"[^\d]", "", num)
-        if cleaned_num.startswith("1") and len(cleaned_num) == 11:
-            area = cleaned_num[1:4]
-            if area in CANADA_AREA_CODES:
-                formatted = f"+1{cleaned_num[1:]}"
-                numbers_found.append(formatted)
-        elif len(cleaned_num) == 10:
-            area = cleaned_num[0:3]
-            if area in CANADA_AREA_CODES:
-                formatted = f"+1{cleaned_num}"
-                numbers_found.append(formatted)
-
-    return list(set(numbers_found))
-
-async def detect_and_send_numbers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text_with_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or not session.get("logged_in", False):
-        await update.message.reply_text("❌ দয়া করে প্রথমে /login দিয়ে Token দিয়ে Log In করুন।")
+    if free_trial_users.get(user_id) != "active":
         return
-
-    text = update.message.text or ""
-    numbers = extract_canadian_numbers(text)
-
-    if not numbers:
-        await update.message.reply_text("কোনো বৈধ কানাডার নাম্বার পাওয়া যায়নি আপনার মেসেজে। দয়া করে সঠিক নম্বর পাঠান।")
+    
+    text = update.message.text
+    numbers_found = extract_canada_numbers(text)
+    
+    if not numbers_found:
+        # কোন কানাডার নাম্বার পাওয়া যায়নি, তাই কিছু করবো না
         return
+    
+    for number in numbers_found:
+        buy_button = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{number}")]])
+        await update.message.reply_text(f"আপনার দেওয়া নাম্বারটি শনাক্ত হলো:\n{number}", reply_markup=buy_button)
 
-    buttons = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in numbers]
-    reply_markup = InlineKeyboardMarkup(buttons)
-    msg = await update.message.reply_text("নিচের নাম্বার গুলো থেকে যেটা কিনতে চান সেটাতে ক্লিক করুন:", reply_markup=reply_markup)
+async def handle_update(request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.update_queue.put(update)
+    return web.Response(text="OK")
 
-    async def delete_message_later(chat_id, message_id):
-        await asyncio.sleep(300)
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except Exception as e:
-            logger.warning(f"Failed to delete message: {e}")
+application = Application.builder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("login", login_command))
+application.add_handler(CommandHandler("buy", buy_command))
+application.add_handler(CallbackQueryHandler(handle_callback))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_with_number))  # নতুন হ্যান্ডলার
 
-    asyncio.create_task(delete_message_later(update.effective_chat.id, msg.message_id))
-
-def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("login", login_command))
-    application.add_handler(CommandHandler("buy", buy_command))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, detect_and_send_numbers))
-    application.add_handler(MessageHandler(filters.Regex(r'^\S+\s+\S+$'), handle_sid_auth))  # sid auth login
-
-    application.run_polling()
+async def main():
+    await application.initialize()
+    await application.start()
+    app = web.Application()
+    app.router.add_post(f"/{BOT_TOKEN}", handle_update)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Bot is running via webhook...")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
