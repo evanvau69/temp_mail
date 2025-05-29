@@ -166,6 +166,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data == "cancel_buy":
         await query.edit_message_text("নাম্বার কিনা বাতিল হয়েছে ☢️")
+        
 import os
 import logging
 import asyncio
@@ -310,61 +311,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("buy_number_"):
         number_to_buy = query.data[len("buy_number_"):]
 
-        # Check user session login & token
-        session = user_sessions.get(user_id)
-        if not session or not session.get("logged_in", False):
-            await context.bot.send_message(chat_id=user_id, text="❌ দয়া করে প্রথমে /login দিয়ে Token দিয়ে Log In করুন।")
-            return
-
-        sid = session.get("sid")
-        auth = session.get("auth")
-
-        async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session_http:
-            # Twilio account status and balance check
-            try:
-                async with session_http.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
-                    if resp.status == 401:
-                        await context.bot.send_message(chat_id=user_id, text="টোকেন Suspend হয়েছে 😥 অন্য টোকেন ব্যবহার করুন ♻️")
-                        return
-                    data = await resp.json()
-                    account_sid = data['accounts'][0]['sid']
-
-                balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Balance.json"
-                async with session_http.get(balance_url) as balance_resp:
-                    balance_data = await balance_resp.json()
-                    balance = float(balance_data.get("balance", 0.0))
-                    currency = balance_data.get("currency", "USD")
-
-                if currency != "USD":
-                    rate_url = f"https://open.er-api.com/v6/latest/{currency}"
-                    async with session_http.get(rate_url) as rate_resp:
-                        rates = await rate_resp.json()
-                        usd_rate = rates["rates"].get("USD", 1)
-                        balance *= usd_rate
-
-                if balance < NUMBER_COST:
-                    await context.bot.send_message(chat_id=user_id, text="আপনার  টোকেনে পর্যাপ্ত ব্যালেন্স নাই 😥 অন্য টোকেন ব্যবহার করুন ♻️")
-                    return
-
-                # Simulate buying number (real buying API call)
-                # Here, you can integrate the Twilio number buying API if available
-
-                balance_after = balance - NUMBER_COST
-                new_text = (
-                    f"🎉 Congratulation! আপনার নাম্বারটি কিনা হয়েছে 🎉\n\n"
-                    f"☯️ Your Number : {number_to_buy}\n"
-                    f"☯️ Your Balance : ${balance_after:.2f}\n"
-                    f"☯️ Cost : ${NUMBER_COST:.2f}"
-                )
-                buttons = [[InlineKeyboardButton("📧 Message ✉️", callback_data=f"message_{number_to_buy}")]]
-                reply_markup = InlineKeyboardMarkup(buttons)
-                await context.bot.send_message(chat_id=user_id, text=new_text, reply_markup=reply_markup)
-
-            except Exception as e:
-                await context.bot.send_message(chat_id=user_id, text=f"Error occurred: {str(e)}")
-
-    elif query.data == "cancel_buy":
-        await query.edit_message_text("Buy operation canceled.❌")
     elif query.data.startswith("message_"):
         selected_number = query.data[len("message_"):]
         session = user_sessions.get(user_id)
