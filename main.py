@@ -3,10 +3,10 @@ import logging
 import asyncio
 import aiohttp
 from aiohttp import web
-import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 import random
+import re
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
@@ -17,10 +17,7 @@ logger = logging.getLogger(__name__)
 free_trial_users = {}
 user_sessions = {}
 
-CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416',
-                    '418', '431', '437', '438', '450', '506', '514', '519', '579', '581',
-                    '587', '604', '613', '639', '647', '672', '705', '709', '778', '780',
-                    '782', '807', '819', '825', '867', '873', '902', '905']
+CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780', '782', '807', '819', '825', '867', '873', '902', '905']
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -179,10 +176,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("number_"):
         selected_number = query.data[len("number_"):]
+        # Send message with number and Buy button
         buy_button = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{selected_number}")]])
         await context.bot.send_message(chat_id=user_id, text=f"{selected_number}", reply_markup=buy_button)
 
     elif query.data.startswith("buy_number_"):
+        # এখানে আপনি চাইলে আরো Buy করার লজিক যোগ করতে পারেন
         number_to_buy = query.data[len("buy_number_"):]
         await context.bot.send_message(chat_id=user_id, text=f"আপনি এই নাম্বারটি কিনতে চান: {number_to_buy}\n\nকিনার প্রক্রিয়া এখানে যোগ করুন।")
 
@@ -228,70 +227,80 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
             )
 
+# ====== নতুন ফাংশন: টেক্সট থেকে কানাডার নাম্বার বের করার জন্য ======
 def extract_canada_numbers(text: str):
-    area_codes_pattern = "(" + "|".join(CANADA_AREA_CODES) + ")"
-    pattern = re.compile(
-        rf"(?:\+?1[\s\-\.]?)?"        # country code optional +1 or 1
-        rf"{area_codes_pattern}"      # valid area code
-        rf"[\s\-\.]?"                 # optional separator
-        rf"(\d{{3}})"                 # first 3 digits
-        rf"[\s\-\.]?"                 # optional separator
-        rf"(\d{{4}})"                 # last 4 digits
-    )
-    matches = pattern.finditer(text)
+    """
+    টেক্সটের মধ্যে থেকে কানাডার নাম্বার গুলো বের করবে
+    নমুনা ফরম্যাট: +1 4161234567, 416-123-4567, 1-416-123-4567, 4161234567 ইত্যাদি
+    """
+    # কানাডার area codes regex pattern (leading +1 optional)
+    area_code_pattern = "(" + "|".join(CANADA_AREA_CODES) + ")"
+    # নম্বর 7 digit (ব্যবহারকারীর convenience এর জন্য - বা space সহ মেনাজড)
+    number_pattern = r"\d{7}"
+    
+    # সম্পূর্ণ নম্বর: optional +1 বা 1, পরে area code, পরে 7 digit নম্বর, মাঝে - বা space থাকতে পারে
+    pattern = re.compile(rf"(?:\+?1[- ]?)?{area_code_pattern}[- ]?\d{{3}}[- ]?\d{{4}}")
+    
+    matches = pattern.findall(text)
+    
+    # matches শুধুমাত্র area code রিটার্ন করে তাই পুরো ম্যাচ করতে নিচের পদ্ধতি ব্যবহার করছি
+    full_matches = pattern.finditer(text)
+    
     results = []
-    for match in matches:
-        area_code = match.group(1)
-        part1 = match.group(2)
-        part2 = match.group(3)
-        full_number = f"+1{area_code}{part1}{part2}"
-        results.append(full_number)
+    for m in full_matches:
+        # Normalize number: +1 + area code + 7 digit without separators
+        raw_num = m.group()
+        digits = re.sub(r"\D", "", raw_num)  # শুধু digit রাখবে
+        # যদি startswith 1 না থাকে তাহলে +1 add করবে
+        if not digits.startswith("1"):
+            digits = "1" + digits
+        # ফাইনাল ফরম্যাট +1XXXXXXXXXX
+        formatted = "+" + digits
+        results.append(formatted)
     return results
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text_with_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if free_trial_users.get(user_id) != "active":
+        return
+    
     text = update.message.text
-    numbers = extract_canada_numbers(text)
-    if numbers:
-        for num in numbers:
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{num}")]])
-            await update.message.reply_text(f"আপনার দেওয়া নাম্বার শনাক্ত হলো:\n{num}", reply_markup=keyboard)
-    else:
-        # যদি নাম্বার না পাওয়া যায় তাহলে চুপ থাকুন বা মেসেজ দিন (এখানে কোনো মেসেজ নাই)
-        pass
+    numbers_found = extract_canada_numbers(text)
+    
+    if not numbers_found:
+        # কোন কানাডার নাম্বার পাওয়া যায়নি, তাই কিছু করবো না
+        return
+    
+    for number in numbers_found:
+        buy_button = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{number}")]])
+        await update.message.reply_text(f"আপনার দেওয়া নাম্বারটি শনাক্ত হলো:\n{number}", reply_markup=buy_button)
 
-# Simple web server for health check or ping to keep bot awake (for Heroku etc.)
-async def handle_root(request):
-    return web.Response(text="Bot is running")
+async def handle_update(request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.update_queue.put(update)
+    return web.Response(text="OK")
 
-async def run_web_server():
-    app = web.Application()
-    app.router.add_get('/', handle_root)
-    port = int(os.getenv("PORT", 8080))
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    logger.info(f"Web server started on port {port}")
+application = Application.builder().token(BOT_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("login", login_command))
+application.add_handler(CommandHandler("buy", buy_command))
+application.add_handler(CallbackQueryHandler(handle_callback))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_with_number))  # নতুন হ্যান্ডলার
 
 async def main():
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("login", login_command))
-    application.add_handler(CommandHandler("buy", buy_command))
-    application.add_handler(CallbackQueryHandler(handle_callback))
-    # Separate handlers for sid_auth and number detection so both work on any text
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    # Start web server concurrently
-    await run_web_server()
-
     await application.initialize()
     await application.start()
-    await application.updater.start_polling()
-    logger.info("Bot started...")
-    await application.updater.idle()
+    app = web.Application()
+    app.router.add_post(f"/{BOT_TOKEN}", handle_update)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 10000))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info("Bot is running via webhook...")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     asyncio.run(main())
