@@ -55,7 +55,7 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if args:
         # ইউজার যদি /buy <area_code> দেয়
-        area_code = args[0]
+        area_code = args[30]
         if area_code in CANADA_AREA_CODES:
             selected_area_codes = [area_code]
         else:
