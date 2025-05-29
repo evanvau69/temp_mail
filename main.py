@@ -130,7 +130,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
 
     elif query.data == "cancel_buy":
-        await query.message.delete()
+    await query.edit_message_text("নাম্বার কিনা বাতিল হয়েছে ☢️")
+    
 
 async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
