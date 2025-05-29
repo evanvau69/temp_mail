@@ -4,13 +4,11 @@ import asyncio
 import aiohttp
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, ContextTypes,
-    CallbackQueryHandler, MessageHandler, filters
-)
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
+import random
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))  # ADMIN_ID ইন্টেজার আকারে নিচ্ছি
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,21 +16,19 @@ logger = logging.getLogger(__name__)
 free_trial_users = {}
 user_sessions = {}
 
-# কানাডার এলাকা কোড লিস্ট (Area Codes)
 CANADA_AREA_CODES = [
-    "204", "226", "236", "249", "250", "289", "306", "343",
-    "365", "387", "403", "416", "418", "431", "437", "438",
-    "450", "506", "514", "519", "579", "581", "587", "600",
-    "604", "613", "639", "647", "672", "705", "709", "778",
-    "780", "782", "807", "819", "825", "867", "873", "902", "905"
+    "204", "226", "236", "249", "250", "289", "306", "343", "365", "387",
+    "403", "416", "418", "431", "437", "438", "450", "506", "514", "519",
+    "579", "581", "587", "600", "604", "613", "639", "647", "672", "705",
+    "709", "742", "778", "780", "782", "807", "819", "825", "867", "873",
+    "902", "905"
 ]
 
-def generate_numbers_for_area(area_code: str, count: int = 30):
-    # প্রতি নম্বর: +1 + area_code + 7 random digits
-    import random
+def generate_numbers_for_area(area_code, count):
     numbers = []
     for _ in range(count):
-        number = "+1" + area_code + "".join(str(random.randint(0, 9)) for _ in range(7))
+        # Random 7 digit number
+        number = f"+1{area_code}{random.randint(1000000, 9999999)}"
         numbers.append(number)
     return numbers
 
@@ -72,10 +68,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     user_name = query.from_user.full_name
     username = query.from_user.username or "N/A"
-    data = query.data
 
-    # Subscription প্ল্যান হ্যান্ডলিং
-    if data == "plan_free":
+    if query.data == "plan_free":
         if free_trial_users.get(user_id):
             await query.edit_message_text("⚠️ আপনি এরই মধ্যে Free Trial ব্যবহার করেছেন।")
         else:
@@ -87,17 +81,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await asyncio.sleep(3600)
                 free_trial_users.pop(user_id, None)
                 await context.bot.send_message(chat_id=user_id, text="🌻 আপনার Free Trial টি শেষ হতে যাচ্ছে")
-
             asyncio.create_task(revoke())
 
-    elif data.startswith("plan_") and data != "plan_free":
+    elif query.data.startswith("plan_"):
         plan_info = {
             "plan_1d": ("1 Day", "2$"),
             "plan_7d": ("7 Day", "10$"),
             "plan_15d": ("15 Day", "15$"),
             "plan_30d": ("30 Day", "20$")
         }
-        duration, price = plan_info.get(data, ("", ""))
+        duration, price = plan_info.get(query.data, ("", ""))
 
         text = (
             f"{user_name} {duration} সময়ের জন্য Subscription নিতে চাচ্ছে।\n\n"
@@ -124,25 +117,19 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await context.bot.send_message(chat_id=user_id, text=payment_msg)
 
-    elif data == "login":
+    elif query.data == "login":
         await context.bot.send_message(chat_id=user_id, text="আপনার Sid এবং Auth Token দিন 🎉\n\nব্যবহার হবে: `<sid> <auth>`", parse_mode='Markdown')
 
-    elif data.startswith("approve_"):
-        uid = int(data.split("_")[1])
+    elif query.data.startswith("approve_"):
+        uid = int(query.data.split("_")[1])
         free_trial_users[uid] = "active"
         await context.bot.send_message(chat_id=uid, text="✅ আপনার Subscription চালু করা হয়েছে")
         await query.edit_message_text("✅ Approve করা হয়েছে এবং Permission দেওয়া হয়েছে।")
 
-    elif data.startswith("cancel_"):
+    elif query.data.startswith("cancel_"):
         await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
 
-    # /buy বাটন রিলেটেড কলব্যাক
-    elif data.startswith("buy_number_"):
-        # এখন এই বাটনে কিছু কাজ নেই, শুধু তথ্য হিসেবে রাখলাম
-        await query.answer("নম্বরটি সিলেক্ট করা হয়েছে।")
-
-    elif data == "cancel_buy":
-        # Cancel বাটনে ক্লিক করলে মেসেজ ও বাটন ডিলিট হবে
+    elif query.data == "cancel_buy":
         await query.message.delete()
 
 async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -189,28 +176,27 @@ async def buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     args = context.args
 
-    # ইউজার সাবস্ক্রিপশন চেক
     if free_trial_users.get(user_id) != "active":
         await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
         return
 
-    # এলাকা কোড যদি না দেয়, তাহলে র‍্যান্ডম ৩০ এলাকা থেকে নেব
-    import random
     if args:
         area_code = args[0]
         if area_code not in CANADA_AREA_CODES:
             await update.message.reply_text("❌ Invalid Canada Area Code. সঠিক কোড দিন।")
             return
-    else:
-        area_code = random.choice(CANADA_AREA_CODES)
 
-    numbers = generate_numbers_for_area(area_code, 30)
+        numbers = generate_numbers_for_area(area_code, 30)
+    else:
+        selected_area_codes = random.sample(CANADA_AREA_CODES, 30)  # ৩০ টি ইউনিক এলাকা কোড
+        numbers = []
+        for code in selected_area_codes:
+            number = generate_numbers_for_area(code, 1)[0]
+            numbers.append(number)
 
     text = "আপনার নাম্বার গুলো হলো 👇👇\n\n"
     text += "\n".join(numbers)
 
-    # বাটন তৈরি - প্রতিটি নাম্বারের জন্য আলাদা বাটন না দিয়ে সব নাম্বার বাটন দেওয়া যাবে না (সাধারণত 30 বাটন খুব বেশি)
-    # তাই আমরা ৩০ নাম্বারের বাটন নেব না, শুধু Cancel বাটন নিচে দিবো
     buttons = [
         [InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")]
     ]
@@ -225,6 +211,7 @@ async def handle_update(request):
     return web.Response(text="OK")
 
 application = Application.builder().token(BOT_TOKEN).build()
+
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("login", login_command))
 application.add_handler(CommandHandler("buy", buy))
