@@ -48,25 +48,42 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
 
-async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     args = context.args
-    selected_area_codes = []
+    phone_numbers = []
 
     if args:
         # ইউজার যদি /buy <area_code> দেয়
-        area_code = args[30]
+        area_code = args[0]
         if area_code in CANADA_AREA_CODES:
-            selected_area_codes = [area_code]
+            # একই area code দিয়ে ৩০ নাম্বার জেনারেট
+            for _ in range(30):
+                number = f"+1{area_code}{random.randint(1000000, 9999999)}"
+                phone_numbers.append(number)
         else:
             await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
             return
     else:
         # কোন area code না দিলে ৩০টি এলাকা থেকে র‍্যান্ডম ৩০টা area code নিবো
-        # যদি CANADA_AREA_CODES ৩০ এর কম হয়, তাহলে যত আছে তত নিবে
         count = min(30, len(CANADA_AREA_CODES))
         selected_area_codes = random.sample(CANADA_AREA_CODES, count)
+        for code in selected_area_codes:
+            number = f"+1{code}{random.randint(1000000, 9999999)}"
+            phone_numbers.append(number)
 
+    message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
+
+    buttons = []
+    for num in phone_numbers:
+        buttons.append([InlineKeyboardButton(num, callback_data=f"number_{num}")])
+
+    buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
+    reply_markup = InlineKeyboardMarkup(buttons)
+
+    await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+    
     # নাম্বার জেনারেট করা
     phone_numbers = []
     for code in selected_area_codes:
