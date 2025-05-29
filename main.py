@@ -75,17 +75,10 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = min(30, len(CANADA_AREA_CODES))
         selected_area_codes = random.sample(CANADA_AREA_CODES, count)
 
-    phone_numbers = []
-    for code in selected_area_codes:
-        number = f"+1{code}{random.randint(1000000, 9999999)}"
-        phone_numbers.append(number)
+    phone_numbers = [f"+1{code}{random.randint(1000000, 9999999)}" for code in selected_area_codes]
 
     message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
-
-    buttons = []
-    for num in phone_numbers:
-        buttons.append([InlineKeyboardButton(num, callback_data=f"number_{num}")])
-
+    buttons = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in phone_numbers]
     buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
     reply_markup = InlineKeyboardMarkup(buttons)
 
@@ -136,10 +129,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔆 User ID : {user_id}\n"
             f"🔆 Username : @{username}"
         )
-        buttons = [
-            [InlineKeyboardButton("APPRUVE ✅", callback_data=f"approve_{user_id}"),
-             InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel_{user_id}")]
-        ]
+        buttons = [[InlineKeyboardButton("APPRUVE ✅", callback_data=f"approve_{user_id}"),
+                    InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel_{user_id}")]]
         reply_markup = InlineKeyboardMarkup(buttons)
 
         await query.message.delete()
@@ -180,48 +171,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         number_to_buy = query.data[len("buy_number_"):]
         await context.bot.send_message(chat_id=user_id, text=f"আপনি এই নাম্বারটি কিনতে চান: {number_to_buy}\n\nকিনার প্রক্রিয়া এখানে যোগ করুন।")
 
-async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if free_trial_users.get(user_id) != "active":
-        return
-
-    try:
-        sid, auth = update.message.text.strip().split(" ", 1)
-    except:
-        await update.message.reply_text("⚠️ সঠিকভাবে Sid এবং Auth দিন, উদাহরণ: `<sid> <auth>`", parse_mode='Markdown')
-        return
-
-    async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
-        async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
-            if resp.status == 401:
-                await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
-                return
-            data = await resp.json()
-            account_name = data['accounts'][0]['friendly_name']
-            balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
-
-        async with session.get(balance_url) as b:
-            balance_data = await b.json()
-            balance = float(balance_data.get("balance", 0.0))
-            currency = balance_data.get("currency", "USD")
-
-            if currency != "USD":
-                rate_url = f"https://open.er-api.com/v6/latest/{currency}"
-                async with session.get(rate_url) as rate_resp:
-                    rates = await rate_resp.json()
-                    usd_rate = rates["rates"].get("USD", 1)
-                    balance = balance * usd_rate
-
-            user_sessions[user_id] = {"sid": sid, "auth": auth, "logged_in": True}
-
-            await update.message.reply_text(
-                f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
-                f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
-                f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
-            )
-
 # ✅ Updated function to detect Canada numbers from messy text
 def extract_canada_numbers(text: str):
     results = set()
@@ -237,17 +186,56 @@ def extract_canada_numbers(text: str):
 
     return list(results)
 
-async def handle_text_with_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if free_trial_users.get(user_id) != "active":
         return
-    
-    text = update.message.text
+
+    text = update.message.text.strip()
+
+    # First try login
+    if " " in text:
+        try:
+            sid, auth = text.split(" ", 1)
+            async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
+                async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
+                    if resp.status == 401:
+                        await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
+                        return
+                    data = await resp.json()
+                    account_name = data['accounts'][0]['friendly_name']
+                    balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
+
+                async with session.get(balance_url) as b:
+                    balance_data = await b.json()
+                    balance = float(balance_data.get("balance", 0.0))
+                    currency = balance_data.get("currency", "USD")
+
+                    if currency != "USD":
+                        rate_url = f"https://open.er-api.com/v6/latest/{currency}"
+                        async with session.get(rate_url) as rate_resp:
+                            rates = await rate_resp.json()
+                            usd_rate = rates["rates"].get("USD", 1)
+                            balance *= usd_rate
+
+                    user_sessions[user_id] = {"sid": sid, "auth": auth, "logged_in": True}
+
+                    await update.message.reply_text(
+                        f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
+                        f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
+                        f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
+                        f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
+                        f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
+                    )
+                    return
+        except:
+            pass
+
+    # Then try number extraction
     numbers_found = extract_canada_numbers(text)
-    
     if not numbers_found:
         return
-    
+
     for number in numbers_found:
         buy_button = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{number}")]])
         await update.message.reply_text(f"আপনার দেওয়া নাম্বারটি শনাক্ত হলো:\n{number}", reply_markup=buy_button)
@@ -263,8 +251,7 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("login", login_command))
 application.add_handler(CommandHandler("buy", buy_command))
 application.add_handler(CallbackQueryHandler(handle_callback))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_with_number))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
 async def main():
     await application.initialize()
