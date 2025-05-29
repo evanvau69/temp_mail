@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 free_trial_users = {}
 user_sessions = {}
-logged_in_users = set()
 
 CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780', '782', '807', '819', '825', '867', '873', '902', '905']
 
@@ -52,13 +51,15 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Subscription ও Login চেক
+    # Check if user has active subscription
     if free_trial_users.get(user_id) != "active":
-        await update.message.reply_text("❌ আপনার Subscription নেই। আপনি এই কমান্ড ব্যবহার করতে পারবেন না।")
+        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
         return
 
-    if user_id not in logged_in_users:
-        await update.message.reply_text("❌ আপনি এখনো লগইন করেননি। দয়া করে আগে /login কমান্ড দিয়ে সঠিক Token দিয়ে লগইন করুন।")
+    # Check if user has logged in with valid token
+    session = user_sessions.get(user_id)
+    if not session or not session.get("logged_in", False):
+        await update.message.reply_text("❌ দয়া করে প্রথমে /login দিয়ে Token দিয়ে Log In করুন।")
         return
 
     args = context.args
@@ -67,7 +68,7 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         area_code = args[0]
         if area_code in CANADA_AREA_CODES:
-            selected_area_codes = [area_code] * 30
+            selected_area_codes = [area_code] * 30  # ৩০ নাম্বার একই area code দিয়ে
         else:
             await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
             return
@@ -81,21 +82,25 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         phone_numbers.append(number)
 
     message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
-    buttons = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in phone_numbers]
+
+    buttons = []
+    for num in phone_numbers:
+        buttons.append([InlineKeyboardButton(num, callback_data=f"number_{num}")])
+
     buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
     reply_markup = InlineKeyboardMarkup(buttons)
-    
-    sent_message = await update.message.reply_text(message_text, reply_markup=reply_markup)
-    
-    # ৫ মিনিট পর মেসেজ ডিলিট করার টাস্ক চালানো হচ্ছে
-    async def delete_message_after_delay():
-        await asyncio.sleep(300)  # ৫ মিনিট = ৩০০ সেকেন্ড
-        try:
-            await sent_message.delete()
-        except Exception as e:
-            logger.warning(f"Failed to delete message: {e}")
 
-    asyncio.create_task(delete_message_after_delay())
+    sent_msg = await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+    # Auto delete after 5 minutes (300 seconds)
+    async def delete_message():
+        await asyncio.sleep(300)
+        try:
+            await sent_msg.delete()
+        except:
+            pass
+
+    asyncio.create_task(delete_message())
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -170,7 +175,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("number_"):
         selected_number = query.data[len("number_"):]
-        await query.answer(f"আপনি নির্বাচন করেছেন: {selected_number}", show_alert=True)
+        # Send message with number and Buy button
+        buy_button = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{selected_number}")]])
+        await context.bot.send_message(chat_id=user_id, text=f"{selected_number}", reply_markup=buy_button)
+
+    elif query.data.startswith("buy_number_"):
+        # এখানে আপনি চাইলে আরো Buy করার লজিক যোগ করতে পারেন
+        number_to_buy = query.data[len("buy_number_"):]
+        await context.bot.send_message(chat_id=user_id, text=f"আপনি এই নাম্বারটি কিনতে চান: {number_to_buy}\n\nকিনার প্রক্রিয়া এখানে যোগ করুন।")
 
 async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -186,8 +198,6 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
         async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
             if resp.status == 401:
-                if user_id in logged_in_users:
-                    logged_in_users.remove(user_id)
                 await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
                 return
             data = await resp.json()
@@ -206,7 +216,7 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     usd_rate = rates["rates"].get("USD", 1)
                     balance = balance * usd_rate
 
-            logged_in_users.add(user_id)
+            user_sessions[user_id] = {"sid": sid, "auth": auth, "logged_in": True}
 
             await update.message.reply_text(
                 f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
