@@ -1,89 +1,63 @@
 import os
 import re
-import random
 import logging
 import asyncio
 import aiohttp
-from aiohttp import web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
-    Application, CommandHandler, ContextTypes,
-    CallbackQueryHandler, MessageHandler, filters
+    Application,
+    CommandHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID"))
+ADMIN_ID = int(os.getenv("ADMIN_ID"))  # Admin Telegram ID
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# স্টোরেজ
 free_trial_users = {}
-user_sessions = {}  # user_id: {"sid": str, "auth": str}
+user_sessions = {}  # সেশন স্টোরেজ (যেখানে sid-auth token রাখা যেতে পারে)
 
-# কানাডার এলাকা কোড লিস্ট (30টি র‍্যান্ডম)
+# Canada এর প্রায় সকল Area Code লিস্ট (৫০+)
 CANADA_AREA_CODES = [
-    "204", "226", "236", "249", "250", "289", "306", "343", "365",
-    "367", "403", "416", "418", "431", "437", "438", "450", "506",
-    "514", "519", "548", "579", "581", "587", "604", "613", "639",
-    "647", "705", "709"
+    '204', '236', '250', '289', '343', '365', '387', '403', '416', '418', '431', '437',
+    '438', '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647',
+    '672', '705', '709', '742', '778', '780', '782', '807', '819', '867', '873', '902',
+    '905', '226', '249', '289', '365', '437', '519', '548', '613', '647', '705', '807',
+    '905', '343', '289', '226'
 ]
 
-# নাম্বার জেনারেট করার ফাংশন
-def generate_canada_numbers(area_code=None, count=30):
-    area_codes = [area_code] if area_code else CANADA_AREA_CODES
-    numbers = []
-    for _ in range(count):
-        ac = random.choice(area_codes)
-        # কানাডিয়ান নাম্বার ফরম্যাট: +1 + AreaCode + 7 digit random number
-        number = f"+1{ac}{random.randint(1000000, 9999999)}"
-        numbers.append(number)
-    return numbers
-
-# ইউজার মেসেজ থেকে কানাডার নাম্বার বের করার রেগুলার এক্সপ্রেশন
-CANADA_NUMBER_REGEX = re.compile(r"(?:\+?1)?(204|226|236|249|250|289|306|343|365|367|403|416|418|431|437|438|450|506|514|519|548|579|581|587|604|613|639|647|705|709)[-\s]?(\d{3})[-\s]?(\d{4})")
-
-# নাম্বার থেকে ফরম্যাট ঠিক করার ফাংশন
-def extract_canada_numbers_from_text(text):
+# --- নাম্বার detect করার ফাংশন ---
+def extract_canada_numbers(text):
+    # Regex যা বিভিন্ন ফরম্যাটে নাম্বার ধরবে
+    pattern = re.compile(r'(\+?1)?\s*[-.(]*\s*(\d{3})\s*[-.)]*\s*(\d{3})\s*[-.]*\s*(\d{4})')
     found_numbers = []
-    for match in CANADA_NUMBER_REGEX.finditer(text):
-        area = match.group(1)
-        part2 = match.group(2)
-        part3 = match.group(3)
-        full_number = f"+1{area}{part2}{part3}"
-        found_numbers.append(full_number)
-    return list(set(found_numbers))  # ইউনিক করে রিটার্ন
+    for match in pattern.finditer(text):
+        area_code = match.group(2)
+        if area_code in CANADA_AREA_CODES:
+            # +1XXXXXXXXXX ফরম্যাটে নাম্বার বানানো
+            number = '+1' + area_code + match.group(3) + match.group(4)
+            if number not in found_numbers:
+                found_numbers.append(number)
+    return found_numbers
 
-# Twilio API দিয়ে ব্যালেন্স চেক করার ফাংশন
-async def check_twilio_balance(sid, auth):
-    async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
-        account_url = "https://api.twilio.com/2010-04-01/Accounts.json"
-        async with session.get(account_url) as resp:
-            if resp.status == 401:
-                return "suspended", None
-            if resp.status != 200:
-                return "error", None
-            data = await resp.json()
-            account_name = data['accounts'][0]['friendly_name']
-
-        balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
-        async with session.get(balance_url) as bresp:
-            if bresp.status != 200:
-                return "error", None
-            balance_data = await bresp.json()
-            balance = float(balance_data.get("balance", 0.0))
-            return "ok", (account_name, balance)
-
-# স্টার্ট কমান্ড
+# --- /start কমান্ড ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_name = update.effective_user.full_name
-    username = update.effective_user.username or "N/A"
 
     if free_trial_users.get(user_id) == "active":
         keyboard = [[InlineKeyboardButton("Login 🔑", callback_data="login")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(f"{user_name} Subscription চালু আছে এবার Log In করুন", reply_markup=reply_markup)
+        await update.message.reply_text(f"{user_name}, Subscription চালু আছে, লগইন করুন", reply_markup=reply_markup)
         return
 
     keyboard = [
@@ -94,54 +68,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🟢 30 Day - 20$", callback_data="plan_30d")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(f"Welcome {user_name} 🌸\nআপনি কোনটি নিতে চাচ্ছেন..?", reply_markup=reply_markup)
+    await update.message.reply_text(f"Welcome {user_name} 🌸\nআপনি কোনটি নিতে চান?", reply_markup=reply_markup)
 
-# লগইন কমান্ড
+# --- /login কমান্ড ---
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if free_trial_users.get(user_id) == "active":
         keyboard = [[InlineKeyboardButton("Login 🔑", callback_data="login")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("আপনার Subscription চালু আছে, নিচে Login করুন ⬇️", reply_markup=reply_markup)
+        await update.message.reply_text("আপনার Subscription আছে, নিচে Login করুন ⬇️", reply_markup=reply_markup)
     else:
         await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
 
-# Callback হ্যান্ডলার
+# --- Callback Handler ---
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     user_name = query.from_user.full_name
-    username = query.from_user.username or "N/A"
 
-    if query.data == "plan_free":
+    data = query.data
+
+    if data == "plan_free":
         if free_trial_users.get(user_id):
-            await query.edit_message_text("⚠️ আপনি এরই মধ্যে Free Trial ব্যবহার করেছেন।")
+            await query.edit_message_text("⚠️ আপনি আগেই Free Trial ব্যবহার করেছেন।")
         else:
             free_trial_users[user_id] = "active"
             await query.message.delete()
-            await context.bot.send_message(chat_id=user_id, text="✅ আপনার Free Trial Subscription টি চালু হয়েছে")
+            await context.bot.send_message(chat_id=user_id, text="✅ আপনার Free Trial Subscription চালু হয়েছে")
 
             async def revoke():
-                await asyncio.sleep(3600)
+                await asyncio.sleep(3600)  # 1 ঘন্টা পরে
                 free_trial_users.pop(user_id, None)
-                await context.bot.send_message(chat_id=user_id, text="🌻 আপনার Free Trial টি শেষ হয়েছে")
+                await context.bot.send_message(chat_id=user_id, text="🌻 আপনার Free Trial শেষ হয়েছে")
+
             asyncio.create_task(revoke())
 
-    elif query.data.startswith("plan_"):
+    elif data.startswith("plan_") and data != "plan_free":
         plan_info = {
             "plan_1d": ("1 Day", "2$"),
             "plan_7d": ("7 Day", "10$"),
             "plan_15d": ("15 Day", "15$"),
             "plan_30d": ("30 Day", "20$")
         }
-        duration, price = plan_info.get(query.data, ("", ""))
+        duration, price = plan_info.get(data, ("Unknown", "0$"))
 
         text = (
-            f"{user_name} {duration} সময়ের জন্য Subscription নিতে চাচ্ছে।\n\n"
+            f"{user_name} {duration} Subscription নিতে চাচ্ছেন।\n\n"
             f"🔆 User Name : {user_name}\n"
             f"🔆 User ID : {user_id}\n"
-            f"🔆 Username : @{username}"
+            f"🔆 Username : @{query.from_user.username or 'N/A'}"
         )
         buttons = [
             [InlineKeyboardButton("APPROVE ✅", callback_data=f"approve_{user_id}"),
@@ -153,172 +129,182 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=reply_markup)
 
         payment_msg = (
-            f"Please send {price} to Binance Pay ID: \nপেমেন্ট করে প্রমাণ হিসেবে Admin এর কাছে স্ক্রিনশট অথবা transaction ID দিন @Mr_Evan3490\n\n"
+            f"Please send {price} to Binance Pay ID.\n"
+            f"পেমেন্টের প্রমাণ Admin-কে দিন @Mr_Evan3490\n\n"
             f"Your payment details:\n"
             f"🆔 User ID: {user_id}\n"
-            f"👤 Username: @{username}\n"
+            f"👤 Username: @{query.from_user.username or 'N/A'}\n"
             f"📋 Plan: {duration}\n"
             f"💰 Amount: {price}"
         )
         await context.bot.send_message(chat_id=user_id, text=payment_msg)
 
-    elif query.data == "login":
-        await context.bot.send_message(chat_id=user_id, text="আপনার Sid এবং Auth Token দিন 🎉\n\nব্যবহার হবে: `<sid> <auth>`", parse_mode='Markdown')
+    elif data == "login":
+        await context.bot.send_message(chat_id=user_id, text="আপনার Sid এবং Auth Token দিন 🎉\n\nব্যবহার: `<sid> <auth>`", parse_mode="Markdown")
 
-    elif query.data.startswith("approve_"):
-        uid = int(query.data.split("_")[1])
+    elif data.startswith("approve_"):
+        uid = int(data.split("_")[1])
         free_trial_users[uid] = "active"
         await context.bot.send_message(chat_id=uid, text="✅ আপনার Subscription চালু করা হয়েছে")
         await query.edit_message_text("✅ Approve করা হয়েছে এবং Permission দেওয়া হয়েছে।")
 
-    elif query.data.startswith("cancel_"):
+    elif data.startswith("cancel_"):
         await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
 
-    elif query.data.startswith("buy_"):
-        # buy_ নাম্বার থেকে নাম্বার নেবো
-        buy_number = query.data[4:]
-        sid_auth = user_sessions.get(user_id)
-        if not sid_auth:
-            await query.answer("❌ প্রথমে লগইন করুন।")
-            return
-        sid, auth = sid_auth["sid"], sid_auth["auth"]
-
-        # ব্যালেন্স চেক
-        status, bal_data = await check_twilio_balance(sid, auth)
-        if status == "suspended":
-            await query.answer("টোকেন Suspend হয়েছে 😥 অন্য টোকেন ব্যবহার করুন ♻️", show_alert=True)
-            return
-        elif status != "ok":
-            await query.answer("ব্যালেন্স চেক করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।", show_alert=True)
-            return
-
-        account_name, balance = bal_data
-        cost_per_number = 1.0  # ধরলাম প্রতিটি নাম্বারের দাম 1$
-
-        if balance < cost_per_number:
-            await query.answer("আপনার টোকেনে পর্যাপ্ত ব্যালেন্স নাই 😥 অন্য টোকেন ব্যবহার করুন ♻️", show_alert=True)
-            return
-
-        # ব্যালেন্স আছে, নাম্বার কিনে ফেলা হলো
-        # এখানে আপনি Twilio API দিয়ে প্রকৃত নাম্বার ক্রয় লজিক যোগ করবেন
-
-        # মেসেজ এডিট
-        new_text = (
-            f"🎉 Congestion নাম্বারটি কিনা হয়েছে 🎉\n\n"
-            f"নাম্বার: {buy_number}"
-        )
-        # নতুন বাটন
+    elif data.startswith("buy_"):
+        # buy_<number> ফরম্যাট থেকে নাম্বার বের করা
+        buy_number = data[4:]
+        # মেসেজ এডিট করে কনফার্মেশন দেখানো
+        confirm_text = f"🎉 Congratulations! নাম্বারটি কিনা হয়েছে 🎉\n\nনাম্বার: {buy_number}"
         keyboard = [[InlineKeyboardButton("Message ✉️", callback_data=f"msg_{buy_number}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(new_text, reply_markup=reply_markup)
+        await query.edit_message_text(text=confirm_text, reply_markup=reply_markup)
 
-    elif query.data.startswith("msg_"):
-        buy_number = query.data[4:]
-        await query.answer(f"আপনি এখন এই নাম্বারে মেসেজ পাঠাতে পারবেন: {buy_number}", show_alert=True)
+    elif data.startswith("msg_"):
+        # message button এ ক্লিক করলে যা হবে (এখানে আপনি কাস্টমাইজ করতে পারবেন)
+        msg_number = data[4:]
+        await context.bot.send_message(chat_id=user_id, text=f"আপনি এই নাম্বার দিয়ে মেসেজ পাঠাতে চান: {msg_number}")
 
-# ইউজারের টোকেন লোগইন হ্যান্ডলার
+# --- /buy কমান্ড --- 
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if free_trial_users.get(user_id) != "active":
+        await update.message.reply_text("❌ আপনার Subscription নেই, প্রথমে Subscription নিন।")
+        return
+
+    args = context.args
+    # যদি args থাকে এবং valid canada area code হয়, সেটা থেকে নাম্বার দিবে, না হলে র‍্যান্ডম ৩০ টি দিবে
+    area_code = None
+    if args:
+        arg_code = args[0]
+        if arg_code.isdigit() and arg_code in CANADA_AREA_CODES:
+            area_code = arg_code
+
+    # ৩০ টি নম্বর তৈরী করার জন্য (র‍্যান্ডম বা নির্দিষ্ট Area code)
+    import random
+
+    def generate_random_number(code):
+        # 7 digit random অংশ
+        rest = ''.join(str(random.randint(0,9)) for _ in range(7))
+        return f"+1{code}{rest}"
+
+    numbers_list = []
+    if area_code:
+        for _ in range(30):
+            numbers_list.append(generate_random_number(area_code))
+    else:
+        for _ in range(30):
+            code = random.choice(CANADA_AREA_CODES)
+            numbers_list.append(generate_random_number(code))
+
+    # ইউজারকে নাম্বার দেখানো
+    msg_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(numbers_list)
+    await update.message.reply_text(msg_text)
+
+# --- ইউজার যখন নাম্বার দিবে ---
+async def handle_numbers_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if free_trial_users.get(user_id) != "active":
+        await update.message.reply_text("❌ আপনার Subscription নেই, প্রথমে Subscription নিন।")
+        return
+
+    text = update.message.text
+    numbers = extract_canada_numbers(text)
+    if not numbers:
+        await update.message.reply_text("কোনো বৈধ Canada নাম্বার পাওয়া যায়নি। আবার চেষ্টা করুন।")
+        return
+
+    # reply তে সব নাম্বার ও নিচে আলাদা আলাদা Buy button দিতে হবে
+    buttons = []
+    for num in numbers:
+        buttons.append([InlineKeyboardButton(f"Buy 💰", callback_data=f"buy_{num}")])
+
+    # মেসেজ পাঠাবো
+    reply_markup = InlineKeyboardMarkup(buttons)
+    msg_text = "আপনার নাম্বার গুলো থেকে বাছাই করুন:\n\n" + "\n".join(numbers)
+    await update.message.reply_text(msg_text, reply_markup=reply_markup)
+
+# --- Sid এবং Auth Token handle করা ---
 async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if free_trial_users.get(user_id) != "active":
         return
 
-    try:
-        sid, auth = update.message.text.strip().split(" ", 1)
-    except:
-        await update.message.reply_text("⚠️ সঠিকভাবে Sid এবং Auth দিন, উদাহরণ: `<sid> <auth>`", parse_mode='Markdown')
+    text = update.message.text.strip()
+
+    # যদি text Sid Auth ফরম্যাট না হয় তাহলে পাস
+    if len(text.split()) != 2:
+        # এটা মনে হবে নাম্বার, তাই অন্য ফাংশনে হ্যান্ডেল হবে
         return
 
-    status, bal_data = await check_twilio_balance(sid, auth)
-    if status == "suspended":
-        await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
-        return
-    if status != "ok":
-        await update.message.reply_text("❌ টোকেন যাচাই করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
-        return
+    sid, auth = text.split()
 
-    account_name, balance = bal_data
-    user_sessions[user_id] = {"sid": sid, "auth": auth}
+    async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
+        try:
+            # Twilio account verify
+            async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
+                if resp.status == 401:
+                    await update.message.reply_text("টোকেন Suspend হয়েছে 😥 অন্য টোকেন ব্যবহার করুন ♻️")
+                    return
+                data = await resp.json()
+                account_name = data['accounts'][0]['friendly_name']
 
-    await update.message.reply_text(
-        f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
-        f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
-        f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
-        f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
-        f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
-    )
+            # Twilio balance check
+            balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
+            async with session.get(balance_url) as bresp:
+                if bresp.status != 200:
+                    await update.message.reply_text("Balance check করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
+                    return
+                balance_data = await bresp.json()
+                balance = float(balance_data.get("balance", 0.0))
+                currency = balance_data.get("currency", "USD")
 
-# /buy কমান্ড হ্যান্ডলার
-async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if free_trial_users.get(user_id) != "active":
-        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে লগইন করুন অথবা Subscription নিন।")
-        return
+                # যদি USD না হয় তাহলে রেট কনভার্ট করতে পারবেন (optional)
 
-    args = context.args
-    area_code = None
-    if args:
-        code = args[0]
-        # এলাকা কোড চেক করুন যদি লিস্টে থাকে
-        if code in CANADA_AREA_CODES:
-            area_code = code
-        else:
-            await update.message.reply_text("⚠️ অনুগ্রহ করে বৈধ কানাডার এরিয়া কোড দিন।")
-            return
+            await update.message.reply_text(
+                f"🎉 Log In Successful 🎉\n\n"
+                f"⭕ Account Name: {account_name}\n"
+                f"⭕ Account Balance: ${balance:.2f}\n\n"
+                f"বিঃদ্রঃ নাম্বার কিনার আগে অবশ্যই ব্যালেন্স চেক করবেন।"
+            )
+            # সেশন এ sid-auth সেট করা যাবে যদি প্রয়োজন হয়
+            user_sessions[user_id] = (sid, auth)
 
-    numbers = generate_canada_numbers(area_code)
+        except Exception as e:
+            logger.error(f"Error verifying Twilio token: {e}")
+            await update.message.reply_text("টোকেন যাচাই করতে সমস্যা হয়েছে। আবার চেষ্টা করুন।")
 
-    # নাম্বারগুলো টেক্সট হিসেবে তৈরি করুন
-    msg_text = "আপনার নাম্বার গুলো হলো 👇👇\n"
-    for n in numbers:
-        msg_text += n + "\n"
-
-    await update.message.reply_text(msg_text)
-
-# ইউজার মেসেজ থেকে নাম্বার ডিটেকশন ও বাটন অ্যাড করা
-async def handle_numbers_with_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if free_trial_users.get(user_id) != "active":
-        return
-
-    text = update.message.text
-    found_numbers = extract_canada_numbers_from_text(text)
-    if not found_numbers:
-        return  # কোন নাম্বার পাওয়া যায় নি
-
-    # প্রতিটি নাম্বারের জন্য বাটন বানানো
-    buttons = []
-    for num in found_numbers:
-        buttons.append([InlineKeyboardButton("Buy 💰", callback_data=f"buy_{num}")])
-
-    reply_markup = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text("\n".join(found_numbers), reply_markup=reply_markup)
-
-async def handle_update(request):
-    data = await request.json()
-    update = Update.de_json(data, application.bot)
-    await application.update_queue.put(update)
-    return web.Response(text="OK")
-
-application = Application.builder().token(BOT_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(CommandHandler("login", login_command))
-application.add_handler(CommandHandler("buy", buy_command))
-application.add_handler(CallbackQueryHandler(handle_callback))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_numbers_with_buttons))
-
+# --- মূল Handler যুক্ত করা ---
 async def main():
+    application = Application.builder().token(BOT_TOKEN).build()
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("login", login_command))
+    application.add_handler(CommandHandler("buy", buy_command))
+    application.add_handler(CallbackQueryHandler(handle_callback))
+    # Sid/Auth কে আলাদা হ্যান্ডেল করা
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
+    # নাম্বার detect করার জন্য আলাদা হ্যান্ডলার (যা আগে sid_auth এ পাস না হওয়া টেক্সট পাবেন)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_numbers_message))
+
     await application.initialize()
     await application.start()
+
+    # Webhook সেটআপ (যদি প্রয়োজন হয়)
+    from aiohttp import web
+    async def handle_update(request):
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return web.Response(text="OK")
+
     app = web.Application()
-    app.router.add_post(f"/{BOT_TOKEN}", handle_update)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("Bot is running via webhook...")
-    await asyncio.Event().wait()
+    app.router.add_post("/webhook", handle_update)
+    await web._run_app(app, host="0.0.0.0", port=8000)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Bot stopped.")
