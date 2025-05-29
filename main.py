@@ -14,14 +14,10 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 free_trial_users = {}
-logged_in_users = {}  # নতুন: যারা সঠিকভাবে লগইন করেছে তাদের user_id এই dict এ থাকবে
 user_sessions = {}
+logged_in_users = set()
 
-CANADA_AREA_CODES = [
-    '204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450',
-    '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780',
-    '782', '807', '819', '825', '867', '873', '902', '905'
-]
+CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780', '782', '807', '819', '825', '867', '873', '902', '905']
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -55,13 +51,12 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    
-    # চেক করছি ইউজারের Subscription আছে কি না
+
+    # Subscription ও Login চেক
     if free_trial_users.get(user_id) != "active":
         await update.message.reply_text("❌ আপনার Subscription নেই। আপনি এই কমান্ড ব্যবহার করতে পারবেন না।")
         return
 
-    # নতুন চেক: ইউজার লগইন করেছে কিনা
     if user_id not in logged_in_users:
         await update.message.reply_text("❌ আপনি এখনো লগইন করেননি। দয়া করে আগে /login কমান্ড দিয়ে সঠিক Token দিয়ে লগইন করুন।")
         return
@@ -89,7 +84,18 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in phone_numbers]
     buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
     reply_markup = InlineKeyboardMarkup(buttons)
-    await update.message.reply_text(message_text, reply_markup=reply_markup)
+    
+    sent_message = await update.message.reply_text(message_text, reply_markup=reply_markup)
+    
+    # ৫ মিনিট পর মেসেজ ডিলিট করার টাস্ক চালানো হচ্ছে
+    async def delete_message_after_delay():
+        await asyncio.sleep(300)  # ৫ মিনিট = ৩০০ সেকেন্ড
+        try:
+            await sent_message.delete()
+        except Exception as e:
+            logger.warning(f"Failed to delete message: {e}")
+
+    asyncio.create_task(delete_message_after_delay())
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -109,7 +115,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async def revoke():
                 await asyncio.sleep(3600)
                 free_trial_users.pop(user_id, None)
-                logged_in_users.pop(user_id, None)  # লগইন তথ্যও মুছে দিবো ফ্রি ট্রায়াল শেষ হলে
                 await context.bot.send_message(chat_id=user_id, text="🌻 আপনার Free Trial টি শেষ হতে যাচ্ছে")
             asyncio.create_task(revoke())
 
@@ -181,9 +186,8 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
         async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
             if resp.status == 401:
-                # যদি Token Suspend হয়, তাহলে logged_in_users থেকে remove করে দিবো
                 if user_id in logged_in_users:
-                    logged_in_users.pop(user_id)
+                    logged_in_users.remove(user_id)
                 await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
                 return
             data = await resp.json()
@@ -202,13 +206,7 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     usd_rate = rates["rates"].get("USD", 1)
                     balance = balance * usd_rate
 
-            # এখানে ইউজারকে লগইন হিসেবে চিহ্নিত করছি
-            logged_in_users[user_id] = {
-                "sid": sid,
-                "auth": auth,
-                "account_name": account_name,
-                "balance": balance
-            }
+            logged_in_users.add(user_id)
 
             await update.message.reply_text(
                 f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
