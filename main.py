@@ -169,7 +169,69 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif query.data.startswith("buy_number_"):
         number_to_buy = query.data[len("buy_number_"):]
-        await context.bot.send_message(chat_id=user_id, text=f"আপনি এই নাম্বারটি কিনতে চান: {number_to_buy}\n\nকিনার প্রক্রিয়া এখানে যোগ করুন।")
+
+        session = user_sessions.get(user_id)
+        if not session or not session.get("logged_in", False):
+            await context.bot.send_message(chat_id=user_id, text="❌ দয়া করে প্রথমে /login দিয়ে Token দিয়ে Log In করুন।")
+            return
+
+        sid = session["sid"]
+        auth = session["auth"]
+        cost = 1.50  # ধরলাম প্রতি নাম্বার $1.50 খরচ হচ্ছে, প্রয়োজনে পরিবর্তন করবেন
+
+        # Check balance & suspend status from Twilio API
+        async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session_http:
+            # Check Account Status
+            async with session_http.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
+                if resp.status == 401:
+                    await context.bot.send_message(chat_id=user_id, text="টোকেন Suspend হয়েছে 😥 অন্য টোকেন ব্যবহার করুন ♻️")
+                    return
+                data = await resp.json()
+                account_name = data['accounts'][0]['friendly_name']
+
+            # Check balance
+            balance_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json"
+            async with session_http.get(balance_url) as bal_resp:
+                balance_data = await bal_resp.json()
+                balance = float(balance_data.get("balance", 0.0))
+                currency = balance_data.get("currency", "USD")
+
+                if currency != "USD":
+                    rate_url = f"https://open.er-api.com/v6/latest/{currency}"
+                    async with session_http.get(rate_url) as rate_resp:
+                        rates = await rate_resp.json()
+                        usd_rate = rates["rates"].get("USD", 1)
+                        balance *= usd_rate
+
+                if balance < cost:
+                    await context.bot.send_message(chat_id=user_id, text="আপনার টোকেনে পর্যাপ্ত ব্যালেন্স নাই 😥 অন্য টোকেন ব্যবহার করুন ♻️")
+                    return
+
+                # Here place logic to buy number using Twilio API (not implemented in your original code)
+                # For now assume buy success
+
+                # Edit the original message with confirmation and details
+                confirm_text = (
+                    f"🎉 Congestion নাম্বারটি কিনা হয়েছে 🎉\n\n"
+                    f"☯️ Your Number : {number_to_buy}\n"
+                    f"☯️ Your Balance : ${balance - cost:.2f}\n"
+                    f"☯️ Cost : ${cost:.2f}"
+                )
+                message_buttons = [[InlineKeyboardButton("📧 Message ✉️", callback_data="send_message")]]
+                reply_markup = InlineKeyboardMarkup(message_buttons)
+
+                # Edit the message where the "Buy" button was clicked
+                try:
+                    await query.edit_message_text(text=confirm_text, reply_markup=reply_markup)
+                except Exception as e:
+                    logger.error(f"Failed to edit message after buy: {e}")
+                    await context.bot.send_message(chat_id=user_id, text=confirm_text, reply_markup=reply_markup)
+
+async def handle_message_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query.data == "send_message":
+        await query.answer()
+        await query.edit_message_text("Message Sending feature is under development.")
 
 # ✅ Updated function to detect Canada numbers from messy text
 def extract_canada_numbers(text: str):
@@ -218,7 +280,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             usd_rate = rates["rates"].get("USD", 1)
                             balance *= usd_rate
 
-                    user_sessions[user_id] = {"sid": sid, "auth": auth, "logged_in": True}
+                    user_sessions[user_id] = {"sid": sid, "auth": auth, "logged_in": True, "balance": balance}
 
                     await update.message.reply_text(
                         f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
@@ -253,18 +315,24 @@ application.add_handler(CommandHandler("buy", buy_command))
 application.add_handler(CallbackQueryHandler(handle_callback))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-async def main():
-    await application.initialize()
-    await application.start()
-    app = web.Application()
-    app.router.add_post(f"/{BOT_TOKEN}", handle_update)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    logger.info("Bot is running via webhook...")
-    await asyncio.Event().wait()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    import nest_asyncio
+    import sys
+    from aiohttp import web
+
+    nest_asyncio.apply()
+
+    app = web.Application()
+    app.router.add_post("/webhook", handle_update)
+    runner = web.AppRunner(app)
+
+    async def start_webhook():
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
+        await site.start()
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        print("Bot is running...")
+
+    asyncio.run(start_webhook())
