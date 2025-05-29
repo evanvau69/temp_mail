@@ -3,3 +3,4 @@ aiohttp
 aiogram
 requests
 twilio
+nest_asyncio
