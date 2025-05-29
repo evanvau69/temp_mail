@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 free_trial_users = {}
 user_sessions = {}
 
-CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780', '782', '807', '819', '825', '867', '873', '902', '905']
+CANADA_AREA_CODES = [
+    '204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450',
+    '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780',
+    '782', '807', '819', '825', '867', '873', '902', '905'
+]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -50,39 +54,35 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    if free_trial_users.get(user_id) != "active":
+        await update.message.reply_text("❌ আপনার Subscription নেই। আপনি এই কমান্ড ব্যবহার করতে পারবেন না।")
+        return
+
     args = context.args
     selected_area_codes = []
 
     if args:
-        # ইউজার যদি /buy <area_code> দেয়
         area_code = args[0]
         if area_code in CANADA_AREA_CODES:
-            # ঐ area code থেকে ৩০ নম্বর জেনারেট করবো
-            count = 30
-            selected_area_codes = [area_code] * count  # একরকম কোড ৩০ বার
+            # একই কোড থেকে ৩০টি নাম্বার তৈরি করা
+            selected_area_codes = [area_code] * 30
         else:
             await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
             return
     else:
-        # কোন area code না দিলে ৩০টি এলাকা থেকে র‍্যান্ডম ৩০টা area code নিবো
+        # কোন কোড না দিলে র‍্যান্ডম ৩০টি এলাকা থেকে নাম্বার
         count = min(30, len(CANADA_AREA_CODES))
         selected_area_codes = random.sample(CANADA_AREA_CODES, count)
 
-    # নাম্বার জেনারেট করা
     phone_numbers = []
     for code in selected_area_codes:
         number = f"+1{code}{random.randint(1000000, 9999999)}"
         phone_numbers.append(number)
 
     message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
-
-    buttons = []
-    for num in phone_numbers:
-        buttons.append([InlineKeyboardButton(num, callback_data=f"number_{num}")])
-
+    buttons = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in phone_numbers]
     buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
     reply_markup = InlineKeyboardMarkup(buttons)
-
     await update.message.reply_text(message_text, reply_markup=reply_markup)
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
