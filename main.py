@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 free_trial_users = {}
+logged_in_users = {}  # নতুন: যারা সঠিকভাবে লগইন করেছে তাদের user_id এই dict এ থাকবে
 user_sessions = {}
 
 CANADA_AREA_CODES = [
@@ -54,8 +55,15 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    # চেক করছি ইউজারের Subscription আছে কি না
     if free_trial_users.get(user_id) != "active":
         await update.message.reply_text("❌ আপনার Subscription নেই। আপনি এই কমান্ড ব্যবহার করতে পারবেন না।")
+        return
+
+    # নতুন চেক: ইউজার লগইন করেছে কিনা
+    if user_id not in logged_in_users:
+        await update.message.reply_text("❌ আপনি এখনো লগইন করেননি। দয়া করে আগে /login কমান্ড দিয়ে সঠিক Token দিয়ে লগইন করুন।")
         return
 
     args = context.args
@@ -64,13 +72,11 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if args:
         area_code = args[0]
         if area_code in CANADA_AREA_CODES:
-            # একই কোড থেকে ৩০টি নাম্বার তৈরি করা
             selected_area_codes = [area_code] * 30
         else:
             await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
             return
     else:
-        # কোন কোড না দিলে র‍্যান্ডম ৩০টি এলাকা থেকে নাম্বার
         count = min(30, len(CANADA_AREA_CODES))
         selected_area_codes = random.sample(CANADA_AREA_CODES, count)
 
@@ -103,6 +109,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             async def revoke():
                 await asyncio.sleep(3600)
                 free_trial_users.pop(user_id, None)
+                logged_in_users.pop(user_id, None)  # লগইন তথ্যও মুছে দিবো ফ্রি ট্রায়াল শেষ হলে
                 await context.bot.send_message(chat_id=user_id, text="🌻 আপনার Free Trial টি শেষ হতে যাচ্ছে")
             asyncio.create_task(revoke())
 
@@ -174,6 +181,9 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
         async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
             if resp.status == 401:
+                # যদি Token Suspend হয়, তাহলে logged_in_users থেকে remove করে দিবো
+                if user_id in logged_in_users:
+                    logged_in_users.pop(user_id)
                 await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
                 return
             data = await resp.json()
@@ -191,6 +201,14 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     rates = await rate_resp.json()
                     usd_rate = rates["rates"].get("USD", 1)
                     balance = balance * usd_rate
+
+            # এখানে ইউজারকে লগইন হিসেবে চিহ্নিত করছি
+            logged_in_users[user_id] = {
+                "sid": sid,
+                "auth": auth,
+                "account_name": account_name,
+                "balance": balance
+            }
 
             await update.message.reply_text(
                 f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
