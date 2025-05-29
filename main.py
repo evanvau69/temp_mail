@@ -2,8 +2,8 @@ import os
 import logging
 import asyncio
 import aiohttp
-import re
 from aiohttp import web
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 import random
@@ -256,8 +256,22 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("Buy 💰", callback_data=f"buy_number_{num}")]])
             await update.message.reply_text(f"আপনার দেওয়া নাম্বার শনাক্ত হলো:\n{num}", reply_markup=keyboard)
     else:
-        # যদি নাম্বার না পাওয়া যায় তাহলে চুপ থাকুন বা মেসেজ দিন
+        # যদি নাম্বার না পাওয়া যায় তাহলে চুপ থাকুন বা মেসেজ দিন (এখানে কোনো মেসেজ নাই)
         pass
+
+# Simple web server for health check or ping to keep bot awake (for Heroku etc.)
+async def handle_root(request):
+    return web.Response(text="Bot is running")
+
+async def run_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_root)
+    port = int(os.getenv("PORT", 8080))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"Web server started on port {port}")
 
 async def main():
     application = Application.builder().token(BOT_TOKEN).build()
@@ -266,10 +280,13 @@ async def main():
     application.add_handler(CommandHandler("login", login_command))
     application.add_handler(CommandHandler("buy", buy_command))
     application.add_handler(CallbackQueryHandler(handle_callback))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))  # Sid Auth Token handle
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))      # Number detect and buy button
+    # Separate handlers for sid_auth and number detection so both work on any text
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sid_auth))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    PORT = int(os.getenv("PORT", 8080))
+    # Start web server concurrently
+    await run_web_server()
+
     await application.initialize()
     await application.start()
     await application.updater.start_polling()
@@ -277,5 +294,4 @@ async def main():
     await application.updater.idle()
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
