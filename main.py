@@ -211,13 +211,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
 
                 # 🔁 Step 2: Delete existing number (if any)
-                incoming_numbers_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers.json"
-                async with session_http.get(incoming_numbers_url) as existing_resp:
-                    existing_data = await existing_resp.json()
-                    for num in existing_data.get("incoming_phone_numbers", []):
-                        sid_to_delete = num["sid"]
-                        delete_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers/{sid_to_delete}.json"
-                        await session_http.delete(delete_url)
+incoming_numbers_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers.json"
+async with session_http.get(incoming_numbers_url) as existing_resp:
+    if existing_resp.status == 404:  # Error checking for not found
+        logger.error(f"Incoming Phone Numbers not found for SID {sid}")
+        await context.bot.send_message(chat_id=user_id, text="❌ নাম্বারগুলি খুঁজে পাওয়া যায়নি।")
+        return
+    existing_data = await existing_resp.json()
+    for num in existing_data.get("incoming_phone_numbers", []):
+        sid_to_delete = num["sid"]
+        delete_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers/{sid_to_delete}.json"
+        async with session_http.delete(delete_url) as delete_resp:
+            if delete_resp.status != 204:
+                logger.error(f"Failed to delete number: {num['sid']}")
+                await context.bot.send_message(chat_id=user_id, text="❌ নাম্বার মুছে ফেলতে সমস্যা হয়েছে।")
 
                 # 🔁 Step 3: Purchase the new number
                 purchase_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers.json"
