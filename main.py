@@ -1,14 +1,14 @@
 import os
 import logging
 import asyncio
+import random
 import aiohttp
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
-import random
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
+ADMIN_ID = os.getenv("ADMIN_ID")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 free_trial_users = {}
 user_sessions = {}
 
-CANADA_AREA_CODES = ['204', '236', '249', '250', '289', '306', '343', '365', '403', '416', '418', '431', '437', '438', '450', '506', '514', '519', '579', '581', '587', '604', '613', '639', '647', '672', '705', '709', '778', '780', '782', '807', '819', '825', '867', '873', '902', '905']
+CANADA_AREA_CODES = ["204", "236", "249", "250", "289", "306", "343", "365", "387", "403", "416", "418", "431", "437", "438", "450", "506", "514", "519", "548", "579", "581", "587", "604", "613", "639", "647", "672", "705", "709", "742", "778", "780", "782", "807", "819", "825", "867", "873", "902", "905"]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -32,7 +32,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("⬜ 1 Hour - Free 🌸", callback_data="plan_free")],
         [InlineKeyboardButton("🔴 1 Day - 2$", callback_data="plan_1d")],
-        [InlineKeyboardButton("🟠 7 Day - 10$", callback_data="plan_7d")],
+        [InlineKeyboardButton("🔸 7 Day - 10$", callback_data="plan_7d")],
         [InlineKeyboardButton("🟡 15 Day - 15$", callback_data="plan_15d")],
         [InlineKeyboardButton("🟢 30 Day - 20$", callback_data="plan_30d")]
     ]
@@ -46,60 +46,7 @@ async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text("আপনার Subscription চালু আছে, নিচে Login করুন ⬇️", reply_markup=reply_markup)
     else:
-        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
-
-    async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    args = context.args
-    phone_numbers = []
-
-    if args:
-        # ইউজার যদি /buy <area_code> দেয়
-        area_code = args[0]
-        if area_code in CANADA_AREA_CODES:
-            # একই area code দিয়ে ৩০ নাম্বার জেনারেট
-            for _ in range(30):
-                number = f"+1{area_code}{random.randint(1000000, 9999999)}"
-                phone_numbers.append(number)
-        else:
-            await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
-            return
-    else:
-        # কোন area code না দিলে ৩০টি এলাকা থেকে র‍্যান্ডম ৩০টা area code নিবো
-        count = min(30, len(CANADA_AREA_CODES))
-        selected_area_codes = random.sample(CANADA_AREA_CODES, count)
-        for code in selected_area_codes:
-            number = f"+1{code}{random.randint(1000000, 9999999)}"
-            phone_numbers.append(number)
-
-    message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
-
-    buttons = []
-    for num in phone_numbers:
-        buttons.append([InlineKeyboardButton(num, callback_data=f"number_{num}")])
-
-    buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
-    reply_markup = InlineKeyboardMarkup(buttons)
-
-    await update.message.reply_text(message_text, reply_markup=reply_markup)
-
-    
-    # নাম্বার জেনারেট করা
-    phone_numbers = []
-    for code in selected_area_codes:
-        number = f"+1{code}{random.randint(1000000, 9999999)}"
-        phone_numbers.append(number)
-
-    message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
-
-    buttons = []
-    for num in phone_numbers:
-        buttons.append([InlineKeyboardButton(num, callback_data=f"number_{num}")])
-
-    buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
-    reply_markup = InlineKeyboardMarkup(buttons)
-
-    await update.message.reply_text(message_text, reply_markup=reply_markup)
+        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন")
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -144,16 +91,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(buttons)
 
         await query.message.delete()
-        if ADMIN_ID:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=reply_markup)
+        await context.bot.send_message(chat_id=ADMIN_ID, text=text, reply_markup=reply_markup)
 
         payment_msg = (
-            f"Please send {price} to Binance Pay ID: \nপেমেন্ট করে প্রমান হিসাবে Admin এর কাছে স্কিনশর্ট অথবা transaction ID দিন @Mr_Evan3490\n\n"
+            f"Please send ${price} to Binance Pay ID: \nপেমেন্ট করে প্রমান হিসাবে Admin এর কাছে স্কিনশর্ট অথবা transaction ID দিন @Mr_Evan3490\n\n"
             f"Your payment details:\n"
             f"🆔 User ID: {user_id}\n"
             f"👤 Username: @{username}\n"
             f"📋 Plan: {duration}\n"
-            f"💰 Amount: {price}"
+            f"💰 Amount: ${price}"
         )
         await context.bot.send_message(chat_id=user_id, text=payment_msg)
 
@@ -170,11 +116,36 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
 
     elif query.data == "cancel_buy":
-        await query.edit_message_text("নাম্বার কিনা বাতিল হয়েছে ☢️")
+        await query.message.delete()
+        await context.bot.send_message(chat_id=user_id, text="নাম্বার কিনা বাতিল হয়েছে ☢️")
 
-    elif query.data.startswith("number_"):
-        selected_number = query.data[len("number_"):]
-        await query.answer(f"আপনি নির্বাচন করেছেন: {selected_number}", show_alert=True)
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    args = context.args
+    phone_numbers = []
+
+    if args:
+        area_code = args[0]
+        if area_code in CANADA_AREA_CODES:
+            for _ in range(30):
+                number = f"+1{area_code}{random.randint(1000000, 9999999)}"
+                phone_numbers.append(number)
+        else:
+            await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
+            return
+    else:
+        count = min(30, len(CANADA_AREA_CODES))
+        selected_area_codes = random.sample(CANADA_AREA_CODES, count)
+        for code in selected_area_codes:
+            number = f"+1{code}{random.randint(1000000, 9999999)}"
+            phone_numbers.append(number)
+
+    message_text = "আপনার নাম্বার গুলো হলো 👇👇\n\n" + "\n".join(phone_numbers)
+    buttons = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in phone_numbers]
+    buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_buy")])
+    reply_markup = InlineKeyboardMarkup(buttons)
+
+    await update.message.reply_text(message_text, reply_markup=reply_markup)
 
 async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -206,7 +177,7 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 async with session.get(rate_url) as rate_resp:
                     rates = await rate_resp.json()
                     usd_rate = rates["rates"].get("USD", 1)
-                    balance = balance * usd_rate
+                    balance *= usd_rate
 
             await update.message.reply_text(
                 f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
