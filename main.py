@@ -57,13 +57,14 @@ async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # ইউজার যদি /buy <area_code> দেয়
         area_code = args[0]
         if area_code in CANADA_AREA_CODES:
-            selected_area_codes = [area_code]
+            # ঐ area code থেকে ৩০ নম্বর জেনারেট করবো
+            count = 30
+            selected_area_codes = [area_code] * count  # একরকম কোড ৩০ বার
         else:
             await update.message.reply_text("⚠️ আপনার দেওয়া area code পাওয়া যায়নি। অনুগ্রহ করে সঠিক কানাডার area code দিন।")
             return
     else:
         # কোন area code না দিলে ৩০টি এলাকা থেকে র‍্যান্ডম ৩০টা area code নিবো
-        # যদি CANADA_AREA_CODES ৩০ এর কম হয়, তাহলে যত আছে তত নিবে
         count = min(30, len(CANADA_AREA_CODES))
         selected_area_codes = random.sample(CANADA_AREA_CODES, count)
 
