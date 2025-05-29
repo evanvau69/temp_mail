@@ -235,9 +235,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=user_id, text="কিছু ভুল হয়েছে, আবার চেষ্টা করুন।")
 
     elif query.data.startswith("message_"):
-        # Example handler for the new message button
         selected_number = query.data[len("message_"):]
-        await context.bot.send_message(chat_id=user_id, text=f"📧 Message button clicked for number: {selected_number}\n\nআপনি এখানে আপনার মেসেজ প্রক্রিয়া যোগ করতে পারেন।")
+        session = user_sessions.get(user_id)
+        if not session or not session.get("logged_in", False):
+            await context.bot.send_message(chat_id=user_id, text="❌ দয়া করে প্রথমে /login দিয়ে Token দিয়ে Log In করুন।")
+            return
+
+        sid = session.get("sid")
+        auth = session.get("auth")
+
+        try:
+            async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session_http:
+                # Get messages received on this number
+                sms_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json?To={selected_number}"
+                async with session_http.get(sms_url) as resp:
+                    data = await resp.json()
+                    messages = data.get("messages", [])
+
+                    if messages:
+                        latest = messages[0]
+                        body = latest.get("body", "❓ কোন কন্টেন্ট নেই")
+                        from_number = latest.get("from", "Unknown")
+
+                        new_text = (
+                            f"📨 নতুন মেসেজ পাওয়া গেছে ✅\n\n"
+                            f"🔸 From: {from_number}\n"
+                            f"🔸 Body: {body}"
+                        )
+                        await query.edit_message_text(new_text)
+                    else:
+                        original_text = query.message.text
+                        await query.edit_message_text("No message received ❌")
+
+                        async def revert_text():
+                            await asyncio.sleep(5)
+                            try:
+                                await query.message.edit_text(original_text, reply_markup=query.message.reply_markup)
+                            except:
+                                pass
+
+                        asyncio.create_task(revert_text())
+        except Exception as e:
+            logger.error(f"Message fetch error: {e}")
+            await context.bot.send_message(chat_id=user_id, text="🚫 মেসেজ পড়তে সমস্যা হয়েছে, পরে চেষ্টা করুন।")
+
 
 # ✅ Updated function to detect Canada numbers from messy text
 def extract_canada_numbers(text: str):
