@@ -332,7 +332,7 @@ if __name__ == "__main__":
         await site.start()
         await application.initialize()
         await application.start()
-        await application.updater.start_polling()
+        await application.updater.start_webhook()
         print("Bot is running...")
 
     asyncio.run(start_webhook())
