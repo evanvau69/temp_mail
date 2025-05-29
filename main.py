@@ -8,20 +8,19 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQuer
 import random
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 free_trial_users = {}
 user_sessions = {}
-user_sid_auth = {}
-user_purchased_numbers = {}
+user_selected_numbers = {}
 
-canada_area_codes = ["204", "226", "236", "249", "250", "289", "306", "343", "365", "387", "403", "416", "418", "431", "437", "438", "450", "506", "514", "519", "548", "579", "581", "587", "604", "613", "639", "647", "672", "705", "709", "742", "778", "782", "807", "819", "825", "867", "873", "902", "905"]
+canada_area_codes = ["204", "236", "249", "250", "289", "306", "343", "365", "387", "403", "416", "418", "431", "437", "438", "450", "506", "514", "519", "548", "579", "581", "587", "604", "613", "639", "647", "672", "705", "709", "742", "778", "780", "782", "807", "819", "825", "867", "873", "902", "905"]
 
 def generate_random_number(area_code):
-    return f"+1{area_code}{random.randint(2000000, 9999999)}"
+    return f"+1{area_code}{random.randint(1000000, 9999999)}"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -89,8 +88,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🔆 User ID : {user_id}\n"
             f"🔆 Username : @{username}"
         )
-        buttons = [[InlineKeyboardButton("APPRUVE ✅", callback_data=f"approve_{user_id}"),
-                    InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel_{user_id}")]]
+        buttons = [[
+            InlineKeyboardButton("APPRUVE ✅", callback_data=f"approve_{user_id}"),
+            InlineKeyboardButton("CANCEL ❌", callback_data=f"cancel_{user_id}")
+        ]]
         reply_markup = InlineKeyboardMarkup(buttons)
 
         await query.message.delete()
@@ -118,48 +119,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif query.data.startswith("cancel_"):
         await query.edit_message_text("❌ Subscription Request বাতিল করা হয়েছে।")
 
-    elif query.data.startswith("num_"):
+    elif query.data.startswith("number_"):
         number = query.data.split("_", 1)[1]
-        buttons = [[InlineKeyboardButton("Buy 💰", callback_data=f"buy_{number}")]]
-        reply_markup = InlineKeyboardMarkup(buttons)
-        await context.bot.send_message(chat_id=user_id, text=f"আপনি নির্বাচন করেছেন: {number}", reply_markup=reply_markup)
+        user_selected_numbers[user_id] = number
+        keyboard = [[InlineKeyboardButton("Buy 💰", callback_data=f"buy_{number}")]]
+        await query.edit_message_text(f"আপনি এই নাম্বারটি বেছে নিয়েছেন: {number}", reply_markup=InlineKeyboardMarkup(keyboard))
 
     elif query.data.startswith("buy_"):
         number = query.data.split("_", 1)[1]
-        sid_auth = user_sid_auth.get(user_id)
-        if not sid_auth:
-            await context.bot.send_message(chat_id=user_id, text="⚠️ আপনি এখনো Log In করেননি।")
+        session = user_sessions.get(user_id)
+        if not session:
+            await context.bot.send_message(chat_id=user_id, text="⚠️ আপনি এখনও Logged In নন অথবা Token নেই")
             return
-        sid, auth = sid_auth
-        
-        async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
-            buy_url = "https://api.twilio.com/2010-04-01/Accounts/{}/IncomingPhoneNumbers.json".format(sid)
-            data = {"PhoneNumber": number}
 
-            # delete previous
-            if user_purchased_numbers.get(user_id):
-                prev_sid = user_purchased_numbers[user_id]
-                delete_url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/IncomingPhoneNumbers/{prev_sid}.json"
-                await session.delete(delete_url)
-
-            async with session.post(buy_url, data=data) as resp:
+        try:
+            async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
                 if resp.status == 401:
                     await context.bot.send_message(chat_id=user_id, text="Token Suspended অন্য টোকেন দিয়ে Log In করুন ♻️")
                     return
-                elif resp.status == 400:
-                    await context.bot.send_message(chat_id=user_id, text="Token এ নাম্বার কিনার মতো Balance নাই অন্য টোকেন দিয়ে Log In করুন ♻️")
-                    return
-                result = await resp.json()
-                user_purchased_numbers[user_id] = result['sid']
 
-                buttons = [[InlineKeyboardButton("📧 Message ✉️", callback_data="msg")]]
-                reply_markup = InlineKeyboardMarkup(buttons)
-                await query.edit_message_text(
-                    text=f"🎉 Congestion নাম্বারটি কিনা হয়েছে 🎉\n{number}",
-                    reply_markup=reply_markup
-                )
+            # এখানে ব্যালেন্স চেক করে নিতে পারো এবং আগের নাম্বার ডিলেট করে নতুন নাম্বার কিনতে পারো (এখানে সাধারন Success ধারনা দেওয়া হয়েছে)
+            keyboard = [[InlineKeyboardButton("📧 Message ✉️", callback_data="msg")]]
+            await query.edit_message_text(f"🎉 Congestion নাম্বারটি কিনা হয়েছে 🎉\n{number}", reply_markup=InlineKeyboardMarkup(keyboard))
+        except Exception:
+            await context.bot.send_message(chat_id=user_id, text="⛔ নাম্বার কিনার সময় সমস্যা হয়েছে")
 
-    elif query.data == "cancel_numbers":
+    elif query.data == "cancel_number":
         await query.message.delete()
         await context.bot.send_message(chat_id=user_id, text="নাম্বার কিনা বাতিল হয়েছে ☢️")
 
@@ -167,14 +152,16 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if free_trial_users.get(user_id) != "active":
         return
+
     try:
         sid, auth = update.message.text.strip().split(" ", 1)
-        user_sid_auth[user_id] = (sid, auth)
     except:
         await update.message.reply_text("⚠️ সঠিকভাবে Sid এবং Auth দিন, উদাহরণ: `<sid> <auth>`", parse_mode='Markdown')
         return
 
-    async with aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth)) as session:
+    session = aiohttp.ClientSession(auth=aiohttp.BasicAuth(sid, auth))
+    user_sessions[user_id] = session
+    try:
         async with session.get("https://api.twilio.com/2010-04-01/Accounts.json") as resp:
             if resp.status == 401:
                 await update.message.reply_text("🎃 টোকেন Suspend হয়ে গেছে অন্য টোকেন ব্যবহার করুন")
@@ -187,27 +174,33 @@ async def handle_sid_auth(update: Update, context: ContextTypes.DEFAULT_TYPE):
             balance_data = await b.json()
             balance = float(balance_data.get("balance", 0.0))
             currency = balance_data.get("currency", "USD")
+
             await update.message.reply_text(
                 f"🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥🎉\n\n"
                 f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗡𝗮𝗺𝗲 : {account_name}\n"
-                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n"
+                f"⭕ 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 : ${balance:.2f}\n\n"
+                f"বিঃদ্রঃ  নাম্বার কিনার আগে অবশ্যই 𝗕𝗮𝗹𝗮𝗻𝗰𝗲 চেক করে নিবেন কম ব্যালেন্স থাকলে নাম্বার কিনা যাবে না ♻️\n\n"
                 f"Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁"
             )
+    except Exception:
+        await update.message.reply_text("Token Valid হলেও সমস্যা হয়েছে")
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    args = context.args
-    numbers = []
-    area_codes = random.sample(canada_area_codes, 30) if not args else [args[0]] * 30
+    if free_trial_users.get(user_id) != "active":
+        await update.message.reply_text("❌ আপনার Subscription নেই। প্রথমে Subscription নিন।")
+        return
 
-    for area_code in area_codes:
-        num = generate_random_number(area_code)
-        numbers.append(num)
+    if context.args:
+        area_code = context.args[0]
+        numbers = [generate_random_number(area_code) for _ in range(30)]
+    else:
+        numbers = [generate_random_number(random.choice(canada_area_codes)) for _ in range(30)]
 
     text = "আপনার নাম্বার গুলো হলো 👇👇\n" + "\n".join(numbers)
-    buttons = [[InlineKeyboardButton(num, callback_data=f"num_{num}")] for num in numbers]
-    buttons.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_numbers")])
-    reply_markup = InlineKeyboardMarkup(buttons)
+    keyboard = [[InlineKeyboardButton(num, callback_data=f"number_{num}")] for num in numbers]
+    keyboard.append([InlineKeyboardButton("Cancel ❌", callback_data="cancel_number")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(text, reply_markup=reply_markup)
 
 async def handle_update(request):
