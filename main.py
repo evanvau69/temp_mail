@@ -4,33 +4,32 @@ import requests
 from flask import Flask, request
 import re
 
-# === CONFIG ===
-API_TOKEN = '7947607009:AAEJ4PoR-YrfvIWOBDHJ3yW4kB4BDK4xpfQ'
+# === CONFIGURATION ===
+API_TOKEN = 'YOUR_BOT_TOKEN'  # <-- এখানে তোমার Bot Token বসাও
 CHANNEL_USERNAME = '@Evans_info'
-WEBHOOK_URL = 'https://twilio-test-yqiu.onrender.com/bot-evan-x123456'
+WEBHOOK_URL = 'https://twilio-test-yqiu.onrender.com'  # <-- এখানে তোমার Render লিংক বসাও
 
-# === BOT & FLASK INIT ===
 bot = telebot.TeleBot(API_TOKEN)
 app = Flask(__name__)
-user_sessions = {}  # store logged-in user sessions
+user_sessions = {}  # Store user SID+AUTH
 
-# === MARKUPS ===
+# === BUTTON GENERATORS ===
 def join_verify_buttons():
     markup = types.InlineKeyboardMarkup()
     markup.add(
-        types.InlineKeyboardButton('Join 🟢', url='https://t.me/Evans_info'),
-        types.InlineKeyboardButton('Verify ✅', callback_data='verify')
+        types.InlineKeyboardButton("Join 🟢", url="https://t.me/Evans_info"),
+        types.InlineKeyboardButton("Verify ✅", callback_data="verify")
     )
     return markup
 
 def login_button():
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton('Login 🔑', callback_data='login'))
+    markup.add(types.InlineKeyboardButton("Login 🔑", callback_data="login"))
     return markup
 
 def logout_button():
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton('Log Out 🔙', callback_data='logout'))
+    markup.add(types.InlineKeyboardButton("Log Out 🔙", callback_data="logout"))
     return markup
 
 # === TWILIO LOGIN FUNCTION ===
@@ -40,30 +39,31 @@ def twilio_login(sid, token):
             f'https://api.twilio.com/2010-04-01/Accounts/{sid}.json',
             auth=(sid, token)
         )
-        if acc.status_code == 200:
-            acc_data = acc.json()
-            name = acc_data.get('friendly_name', 'N/A')
+        if acc.status_code != 200:
+            return False, None, None
 
-            # Get balance
-            balance_req = requests.get(
-                f'https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json',
-                auth=(sid, token)
-            )
-            balance_data = balance_req.json()
-            balance = float(balance_data['balance'])
-            currency = balance_data['currency']
+        name = acc.json().get('friendly_name', 'Unknown')
 
-            # Convert to USD if needed
-            if currency != 'USD':
-                rate_req = requests.get(f'https://api.exchangerate.host/convert?from={currency}&to=USD&amount={balance}')
-                balance = float(rate_req.json()['result'])
+        balance_res = requests.get(
+            f'https://api.twilio.com/2010-04-01/Accounts/{sid}/Balance.json',
+            auth=(sid, token)
+        )
+        balance_data = balance_res.json()
+        balance = float(balance_data['balance'])
+        currency = balance_data['currency']
 
-            return True, name, f"{balance:.2f}"
+        # Currency convert if not USD
+        if currency != 'USD':
+            conv = requests.get(
+                f"https://api.exchangerate.host/convert?from={currency}&to=USD&amount={balance}"
+            ).json()
+            balance = float(conv['result'])
+
+        return True, name, f"{balance:.2f}"
     except:
-        pass
-    return False, None, None
+        return False, None, None
 
-# === START COMMAND ===
+# === /start HANDLER ===
 @bot.message_handler(commands=['start'])
 def start_handler(message):
     user_id = message.from_user.id
@@ -81,11 +81,11 @@ def start_handler(message):
                 reply_markup=join_verify_buttons()
             )
     except:
-        bot.send_message(message.chat.id, "❌ চ্যানেল যাচাই করা যাচ্ছে না, বটকে অ্যাডমিন দিন।")
+        bot.send_message(message.chat.id, "❌ চ্যানেল যাচাই করা যাচ্ছে না। বটকে চ্যানেলের অ্যাডমিন বানান।")
 
-# === VERIFY BUTTON ===
+# === VERIFY BUTTON HANDLER ===
 @bot.callback_query_handler(func=lambda call: call.data == 'verify')
-def verify_channel(call):
+def verify_handler(call):
     user_id = call.from_user.id
     try:
         member = bot.get_chat_member(CHANNEL_USERNAME, user_id)
@@ -104,29 +104,33 @@ def verify_channel(call):
     except:
         bot.answer_callback_query(call.id, "❌ যাচাই করা যাচ্ছে না।")
 
-# === LOGIN COMMAND ===
+# === /login HANDLER ===
 @bot.message_handler(commands=['login'])
 def login_command(message):
-    bot.send_message(message.chat.id, "Login করার জন্য নিচের বাটনে ক্লিক করুন", reply_markup=login_button())
+    bot.send_message(
+        message.chat.id,
+        "Login করার জন্য নিচের বাটনে ক্লিক করুন",
+        reply_markup=login_button()
+    )
 
 # === LOGIN BUTTON CLICK ===
 @bot.callback_query_handler(func=lambda call: call.data == 'login')
-def login_button_click(call):
+def login_click(call):
     bot.delete_message(call.message.chat.id, call.message.message_id)
     bot.send_message(
         call.message.chat.id,
-        "অনুগ্রহ করে `<SID> <AUTH>` ফরম্যাটে পাঠান।",
+        "অনুগ্রহ করে `<SID> <AUTH>` ফরম্যাটে পাঠান",
         parse_mode='Markdown'
     )
 
-# === HANDLE SID AUTH TEXT ===
+# === CREDENTIAL INPUT HANDLER ===
 @bot.message_handler(func=lambda m: re.match(r'^AC[a-zA-Z0-9]{32} [a-zA-Z0-9]{32}$', m.text.strip()))
-def handle_twilio_login(message):
-    sid, token = message.text.strip().split()
-    success, name, balance = twilio_login(sid, token)
+def sid_auth_handler(message):
+    sid, auth = message.text.strip().split()
+    success, name, balance = twilio_login(sid, auth)
 
     if success:
-        user_sessions[message.from_user.id] = {'sid': sid, 'token': token}
+        user_sessions[message.from_user.id] = {'sid': sid, 'auth': auth}
         bot.send_message(
             message.chat.id,
             f"""🎉 𝐋𝐨𝐠 𝐈𝐧 𝐒𝐮𝐜𝐜𝐞𝐬𝐬𝐟𝐮𝐥 🎉
@@ -149,23 +153,22 @@ Founded By 𝗠𝗿 𝗘𝘃𝗮𝗻 🍁
             reply_markup=login_button()
         )
 
-# === LOG OUT ===
+# === LOGOUT BUTTON ===
 @bot.callback_query_handler(func=lambda call: call.data == 'logout')
-def logout_handler(call):
+def logout_user(call):
     user_sessions.pop(call.from_user.id, None)
     bot.edit_message_text("Log Out Success ✅", call.message.chat.id, call.message.message_id)
 
-# === FLASK ROUTE FOR WEBHOOK ===
+# === WEBHOOK HANDLER ===
 @app.route('/', methods=['POST'])
 def webhook():
     if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
+        update = telebot.types.Update.de_json(request.data.decode("utf-8"))
         bot.process_new_updates([update])
         return 'ok', 200
-    return 'Invalid', 403
+    return 'invalid', 403
 
-# === STARTUP HOOK ===
+# === RUN FLASK APP ===
 if __name__ == '__main__':
     bot.remove_webhook()
     bot.set_webhook(url=WEBHOOK_URL)
