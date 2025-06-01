@@ -8,8 +8,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQuer
 import random
 import re
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID")) if os.getenv("ADMIN_ID") else None
+BOT_TOKEN = os.getenv("7947607009:AAEJ4PoR-YrfvIWOBDHJ3yW4kB4BDK4xpfQ")
+ADMIN_ID = int(os.getenv("6165060012")) if os.getenv("6165060012") else None
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
