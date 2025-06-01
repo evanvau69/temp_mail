@@ -4,6 +4,6 @@ requests
 twilio
 nest_asyncio
 pyTelegramBotAPI
-pyTelegramBotAPI==4.15.4
 Flask==2.3.3
 requests==2.31.0
+pyTelegramBotAPI==4.15.4
