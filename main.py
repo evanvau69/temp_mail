@@ -41,7 +41,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🟢 30 Day - 20$", callback_data="plan_30d")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(f"Welcome {user_name} 🌸\nআপনি কোনটি নিতে চাচ্ছেন..?", reply_markup=reply_markup)
+    await update.message.reply_text(f"Welcome {user_name} 🌸\nএই @vimtips_free_earn চ্যানেলে জয়েন করে একটা স্কিনশর্ট নিয়ে @EVANHELPING_BOT এই বটে সেন্ড করুন তার পর যেকোনো একটা Subscription ক্লিক করুন", reply_markup=reply_markup)
 
 async def login_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
